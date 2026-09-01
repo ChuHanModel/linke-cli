@@ -25,5 +25,13 @@
     "cli",
     "agent-skill"
   ],
-  "license": "MIT"
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ChuHanModel/linke-cli.git"
+  },
+  "homepage": "https://github.com/ChuHanModel/linke-cli#readme",
+  "bugs": {
+    "url": "https://github.com/ChuHanModel/linke-cli/issues"
+  }
 }
