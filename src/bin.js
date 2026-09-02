@@ -126,20 +126,94 @@ function openBrowser(url) {
   exec(cmd, () => {}) // 打开失败不致命：终端已打印 URL
 }
 
+function pickPrimaryLanUrl(urls) {
+  // 主网卡取舍：192.168.x 优先（家用路由常态），其次 10.x / 172.16-31.x
+  const score = (url) => {
+    if (url.includes('//192.168.')) return 0
+    if (url.includes('//10.')) return 1
+    if (/\/\/172\.(1[6-9]|2\d|3[01])\./.test(url)) return 2
+    return 3
+  }
+  return [...urls].sort((a, b) => score(a) - score(b))[0] || null
+}
+
+/**
+ * 验证回调工厂（T7 验收 8：复用 session 状态机的登录实现，不另写
+ * 登录路径）。凭据仅在验证通过后才落盘（0600 不变式），失败不留
+ * 半成品文件。导出供测试注入 fake 适配器验证分类与落盘纪律。
+ */
+export function createVerifyCredentials({ school = DEFAULT_SCHOOL, apiBase = DEFAULT_API_BASE } = {}) {
+  return async function verifyCredentials(userId, password) {
+    const config = { school, userId, password, apiBase }
+    const adapter = getAdapter(school)
+    try {
+      const session = await forceLogin(adapter, config) // 内部含 saveSession
+      saveConfig(config) // 验证通过才落盘
+      const info = session.userInfo || {}
+      return {
+        ok: true,
+        summary: {
+          name: info.name || '',
+          unit: info.unit || '',
+          weekNow: info.week ? info.week.now : '',
+          weekAll: info.week ? info.week.all : '',
+        },
+      }
+    } catch (err) {
+      if (err instanceof LinkeError && err.code === 'CREDENTIAL_INVALID') {
+        return { ok: false, kind: 'credential', message: err.message }
+      }
+      return { ok: false, kind: 'service', message: err.message || String(err) }
+    }
+  }
+}
+
 async function cmdLogin(flags) {
   const qr = flags.qr === true
-  let settle
-  const submitted = new Promise((resolve) => {
-    settle = resolve
-  })
-  const handle = await startLoginServer({ qr, onSubmit: settle })
-  progress('登录页已就绪（5 分钟内有效，成功或超时后自动关闭）')
+  const verifyCredentials = createVerifyCredentials()
+
+  let terminalOutcome = 'closed'
+  const onEvent = (event) => {
+    switch (event.type) {
+      case 'submitted':
+        progress(`收到网页提交（第 ${event.attempts}/3 次尝试），正在验证教务登录...`)
+        break
+      case 'success': {
+        const s = event.summary || {}
+        const bits = [s.name, s.weekNow ? `第 ${s.weekNow} 周` : ''].filter(Boolean).join(' · ')
+        progress(`验证通过${bits ? `（${bits}）` : ''}`)
+        progress(`凭据已保存到 ~/.linke-cli/config.json（权限 600），session 已就绪`)
+        break
+      }
+      case 'credential-error':
+        progress(`教务返回密码错误${event.remaining > 0 ? `（剩余 ${event.remaining} 次尝试）` : ''}`)
+        break
+      case 'service-error':
+        progress(`验证服务异常：${event.message}${event.remaining > 0 ? `（剩余 ${event.remaining} 次尝试）` : ''}`)
+        break
+      case 'attempts-exhausted':
+        progress('已达尝试上限（3 次），登录服务关闭；请确认凭据后重新运行 linke login')
+        break
+      case 'timeout':
+        progress('超时未完成验证，凭据未保存；可重新运行 linke login')
+        break
+      default:
+        break
+    }
+    if (event.type === 'success') terminalOutcome = 'success'
+    if (event.type === 'timeout') terminalOutcome = 'timeout'
+    if (event.type === 'attempts-exhausted') terminalOutcome = 'exhausted'
+  }
+
+  const handle = await startLoginServer({ qr, verify: verifyCredentials, onEvent })
+  progress('登录页已就绪（提交后网页内完成验证；5 分钟超时，成功或达尝试上限后自动关闭）')
   progress(`本机访问: ${handle.urls.local}`)
   if (qr && handle.urls.lan.length > 0) {
-    progress('局域网访问（含一次性令牌，勿转发他人）:')
-    for (const lan of handle.urls.lan) {
-      progress(`  ${lan}`)
-      const { modules } = buildQr(Buffer.from(lan, 'utf8'))
+    progress('局域网访问（含会话令牌，勿转发他人）:')
+    for (const lan of handle.urls.lan) progress(`  ${lan}`)
+    const primary = pickPrimaryLanUrl(handle.urls.lan)
+    if (primary) {
+      const { modules } = buildQr(Buffer.from(primary, 'utf8'))
       process.stderr.write('\n' + renderTerminal(modules, 2) + '\n\n')
     }
   } else if (qr) {
@@ -155,21 +229,16 @@ async function cmdLogin(flags) {
     process.exit(130)
   })
 
-  const result = await submitted
-  if (!result.ok) {
-    progress('超时未提交，凭据未保存；可重新运行 linke login')
-    return 1
+  await handle.done
+  if (terminalOutcome === 'success') {
+    emitJson({ ok: true, outcome: 'success' })
+    return 0
   }
-  progress(`凭据已保存（学号 ${result.userId}），正在验证教务登录...`)
-  // 复用 verify 逻辑：网页配置后立即做一次真实登录验证。
-  // 验证失败不影响已保存的凭据（多为验证码偶发），提示后以非零码退出。
-  try {
-    return await cmdVerify()
-  } catch (err) {
-    progress(`凭据已保存，但本次自动验证未通过：${err.message || err}`)
-    progress('稍后运行任意查询命令（如 linke scores）会自动重试登录')
-    return err instanceof LinkeError ? err.exitCode : 1
-  }
+  if (terminalOutcome === 'exhausted') return 3 // 对齐 LOGIN_RETRY_EXHAUSTED 契约
+  if (terminalOutcome === 'timeout') return 1
+  // closed：页面未完成验证即被关闭（如令牌取走失败后的兜底收摊）
+  progress('登录服务已结束，凭据未保存；可重新运行 linke login')
+  return 1
 }
 
 async function cmdVerify() {

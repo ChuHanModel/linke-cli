@@ -40,7 +40,20 @@ test('parseUserData 提取姓名/单位/专业/班级', () => {
   assert.equal(info.unit, '山东财经大学会计学院')
   assert.equal(info.discipline, '会计学')
   assert.equal(info.class, '会计2401')
+  assert.equal(info.week, null)
   assert.equal(hasAuthenticatedProfileMarkers(html, info), true)
+})
+
+test('parseUserData 提取当前教学周（T7 成功页确认信息口径）', () => {
+  const html = `
+    <span class="blue f16 b">张三</span>
+    <span class="main_text main_color">第3周</span>/20周
+    <div class="middletopdwxxcont">a</div>
+    <div class="middletopdwxxcont">b</div>
+    <div class="middletopdwxxcont">c</div>
+  `
+  const info = parseUserData(html)
+  assert.deepEqual(info.week, { now: '3', all: '20' })
 })
 
 test('parseUserData 登录页 HTML 无特征', () => {

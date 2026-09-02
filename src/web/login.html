@@ -33,9 +33,32 @@
     border-radius: 8px; background: #2da44e; color: #fff; cursor: pointer;
   }
   button:disabled { opacity: .6; cursor: default; }
-  .msg { margin-top: 16px; font-size: 13px; line-height: 1.7; display: none; }
-  .msg.ok { display: block; color: #1a7f37; }
-  .msg.err { display: block; color: #cf222e; }
+  .msg { margin-top: 16px; font-size: 13px; line-height: 1.7; display: none; white-space: pre-line; }
+  .msg.cred { display: block; color: #cf222e; }
+  .msg.svc { display: block; color: #9a6700; }
+  /* 验证中 */
+  .verifying { display: none; text-align: center; padding: 18px 0 8px; }
+  .verifying .spinner {
+    width: 34px; height: 34px; margin: 0 auto 14px; border-radius: 50%;
+    border: 3px solid #d0d7de; border-top-color: #2da44e;
+    animation: spin 0.9s linear infinite;
+  }
+  @media (prefers-color-scheme: dark) { .verifying .spinner { border-color: #3a4149; border-top-color: #2da44e; } }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .verifying p { font-size: 14px; color: #6a737d; line-height: 1.7; }
+  @media (prefers-color-scheme: dark) { .verifying p { color: #9aa4af; } }
+  /* 成功 */
+  .success { display: none; text-align: center; padding: 10px 0 0; }
+  .success .mark { font-size: 40px; line-height: 1; }
+  .success h2 { font-size: 17px; margin: 10px 0 6px; }
+  .success .info { font-size: 14px; color: #6a737d; line-height: 1.8; }
+  @media (prefers-color-scheme: dark) { .success .info { color: #9aa4af; } }
+  .success .next {
+    margin-top: 16px; padding: 12px; border-radius: 8px; background: #f0f6ff;
+    font-size: 13px; line-height: 1.8; text-align: left;
+  }
+  @media (prefers-color-scheme: dark) { .success .next { background: #1b2635; } }
+  .success .next code { background: rgba(175,184,193,.25); padding: 1px 6px; border-radius: 4px; }
 </style>
 </head>
 <body>
@@ -43,14 +66,31 @@
     <h1>林课 linke · 教务账号配置</h1>
     <p class="sub">此页面由<strong>你本机的 linke CLI</strong> 提供，密码只保存在本机
     （~/.linke-cli/，权限 600），不会发送到任何服务器。</p>
+
     <form id="form">
       <label for="userId">学号</label>
       <input id="userId" name="userId" autocomplete="username" inputmode="numeric" required>
       <label for="password">教务密码</label>
       <input id="password" name="password" type="password" autocomplete="current-password" required>
-      <button id="btn" type="submit">保存到本机</button>
+      <button id="btn" type="submit">验证并保存</button>
     </form>
     <p id="msg" class="msg"></p>
+
+    <div id="verifying" class="verifying">
+      <div class="spinner"></div>
+      <p id="verifyText">正在验证教务登录…<br>（自动获取并识别验证码，约需数秒，请勿关闭本页）</p>
+    </div>
+
+    <div id="success" class="success">
+      <div class="mark">✅</div>
+      <h2 id="okTitle">验证成功</h2>
+      <p class="info" id="okInfo"></p>
+      <div class="next">凭据已保存到本机（权限 600）。<br>
+        现在可以直接问你的 AI：<br>
+        <code>「我这周有什么课」「我的成绩怎么样」</code><br>
+        也可以在终端运行 <code>linke schedule</code> 查看。
+      </div>
+    </div>
   </main>
 <script>
   const params = new URLSearchParams(location.search)
@@ -58,35 +98,110 @@
   const form = document.getElementById('form')
   const btn = document.getElementById('btn')
   const msg = document.getElementById('msg')
+  const verifying = document.getElementById('verifying')
+  const success = document.getElementById('success')
+  const userIdInput = document.getElementById('userId')
+  const passwordInput = document.getElementById('password')
+  let polling = null
+
+  function showForm() {
+    form.style.display = ''
+    verifying.style.display = 'none'
+    success.style.display = 'none'
+    btn.disabled = false
+    btn.textContent = '验证并保存'
+  }
+  function showVerifying() {
+    form.style.display = 'none'
+    msg.className = 'msg'
+    verifying.style.display = 'block'
+  }
+  function showSuccess(info) {
+    form.style.display = 'none'
+    verifying.style.display = 'none'
+    msg.className = 'msg'
+    success.style.display = 'block'
+    document.getElementById('okInfo').textContent = info
+  }
+
+  async function pollResult() {
+    try {
+      const res = await fetch('/result?t=' + encodeURIComponent(token), {
+        headers: { 'Accept': 'application/json' }
+      })
+      if (res.status === 403) {
+        stopPoll()
+        msg.className = 'msg svc'
+        msg.textContent = '会话已结束（成功或超时）。请回终端查看结果；如需重新配置请重新运行 linke login。'
+        showForm()
+        return
+      }
+      const data = await res.json()
+      if (data.status === 'verifying' || data.status === 'idle') return
+      stopPoll()
+      if (data.type === 'success') {
+        const s = data.summary || {}
+        const lines = []
+        if (s.name) lines.push('姓名：' + s.name)
+        if (s.unit) lines.push(s.unit)
+        if (s.weekNow) lines.push('当前教学周：第 ' + s.weekNow + ' 周' + (s.weekAll ? ' / 共 ' + s.weekAll + ' 周' : ''))
+        showSuccess(lines.length ? lines.join('\n') : '教务登录验证通过，凭据已保存。')
+        return
+      }
+      // 失败：回到表单
+      showForm()
+      if (data.type === 'credential') {
+        msg.className = 'msg cred'
+        msg.textContent = '教务返回：' + (data.message || '账号或密码错误') + '。\n' +
+          '⚠️ 连续输错密码可能导致教务账号被锁定，请确认后重试' +
+          (data.remaining > 0 ? '（剩余 ' + data.remaining + ' 次尝试机会）。' : '。')
+      } else {
+        msg.className = 'msg svc'
+        msg.textContent = (data.message || '网络或验证码识别服务异常') + '。\n' +
+          '这通常与账号密码无关，稍后重试即可' +
+          (data.remaining > 0 ? '（剩余 ' + data.remaining + ' 次）' : '') +
+          '。'
+      }
+      if (data.final) {
+        btn.disabled = true
+        btn.textContent = '已达尝试上限'
+        msg.textContent += '\n已达尝试上限（' + data.maxAttempts + ' 次），本服务即将关闭；请回终端重新运行 linke login。'
+      }
+    } catch {
+      /* 网络瞬断继续轮询 */
+    }
+  }
+  function stopPoll() {
+    if (polling) { clearInterval(polling); polling = null }
+  }
+
   form.addEventListener('submit', async (e) => {
     e.preventDefault()
     msg.className = 'msg'
     btn.disabled = true
-    btn.textContent = '保存中...'
+    btn.textContent = '提交中...'
     try {
       const res = await fetch('/submit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           token,
-          userId: document.getElementById('userId').value.trim(),
-          password: document.getElementById('password').value
+          userId: userIdInput.value.trim(),
+          password: passwordInput.value
         })
       })
       const data = await res.json()
-      if (data.ok) {
-        msg.className = 'msg ok'
-        msg.textContent = '已保存到本机 ~/.linke-cli/config.json（权限 600）。' +
-          '本页面服务已自动关闭，可以关闭此标签页；回到终端查看验证结果。'
-        form.style.display = 'none'
-      } else {
-        throw new Error(data.error || '保存失败')
-      }
+      if (!data.ok) throw new Error(data.error || '提交失败')
+      showVerifying()
+      passwordInput.value = '' // 提交后即清空，避免长期驻留输入框
+      stopPoll()
+      polling = setInterval(pollResult, 800)
+      pollResult()
     } catch (err) {
-      msg.className = 'msg err'
-      msg.textContent = '保存失败：' + err.message + '。请回终端重新运行 linke login 后重试。'
+      msg.className = 'msg svc'
+      msg.textContent = '提交失败：' + err.message
       btn.disabled = false
-      btn.textContent = '保存到本机'
+      btn.textContent = '验证并保存'
     }
   })
 </script>

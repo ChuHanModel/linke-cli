@@ -10,23 +10,27 @@
 import { stripSpaces, isJwLoginExpired } from '../../util.js'
 import { parseError } from '../../errors.js'
 
-/** 解析个人主页：姓名/单位/专业/班级（用于登录确认与 status 展示） */
+/** 解析个人主页：姓名/单位/专业/班级 + 当前教学周（用于登录确认与 status/成功页展示） */
 export function parseUserData(html) {
   if (!html || typeof html !== 'string') {
-    return { name: '', unit: '', discipline: '', class: '' }
+    return { name: '', unit: '', discipline: '', class: '', week: null }
   }
   const nameMatch = html.match(/<span class="blue f16 b">(.*?)<\/span>/)
   const name = nameMatch ? nameMatch[1] : ''
   const userMatches = html.matchAll(/middletopdwxxcont">(.*?)<\/div>/g)
   const userData = Array.from(userMatches).map((m) => m[1])
+  // 周次（教务主页 xsMain_new.jsp 口径，交互文档 1.6）
+  const weekMatch = html.match(/<span class="main_text main_color">第(.*?)周<\/span>\/(.*?)周/)
+  const week = weekMatch ? { now: weekMatch[1] || '', all: weekMatch[2] || '' } : null
   if (userData.length < 3) {
-    return { name: name || '', unit: '', discipline: '', class: '' }
+    return { name: name || '', unit: '', discipline: '', class: '', week }
   }
   return {
     name: name || '',
     unit: userData[0] || '',
     discipline: userData[1] || '',
     class: userData[2] || '',
+    week,
   }
 }
 

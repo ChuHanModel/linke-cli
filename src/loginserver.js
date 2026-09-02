@@ -1,16 +1,17 @@
 /**
- * 本地登录服务（T6）：`linke login` 在用户本机起内置登录页。
+ * 本地登录服务（T7：网页内验证闭环）：
  *
- * 安全口径（T6 验收 1-4）：
- * - 本地模式仅绑 127.0.0.1 随机端口；二维码模式（--qr）绑 0.0.0.0
- *   供局域网手机访问，URL 强制携带一次性令牌；
- * - 令牌一次性：提交成功（无论凭据是否有效）立即失效；
- * - 凭据只经 POST /submit 进入本进程 → saveConfig 落盘（0600），
- *   不写任何日志、不打印；
- * - Host 头必须是 IP 字面量（防 DNS rebinding）；Origin 头存在时
- *   必须同源（防跨站提交）；页面为随包分发的静态文件（可审计），
- *   不从云端拉取任何内容；
- * - 服务在提交成功或超时（默认 5 分钟）后自动关闭。
+ * 流程：页面提交凭据 → 服务立即应答并进入「验证中」→ CLI 侧执行
+ * 完整教务登录验证（由 verify 回调注入，复用 session 状态机的登录
+ * 实现）→ 页面轮询 GET /result 获取结果 → 成功才由 verify 回调落盘。
+ *
+ * 令牌语义（T7 验收 3，会话化折中）：URL 令牌在会话内有效——
+ * 成功 / 超时 / 达尝试上限即失效。尝试上限默认 3 次（保守值：
+ * 教务锁定阈值无档案记录，按卡文口径取 3），既防本机令牌爆破，
+ * 更防教务系统因连续错密码锁定账号。
+ *
+ * 安全口径（T6 不回归）：Host 必须 IP 字面量（防 DNS rebinding）、
+ * Origin 存在须同源（防跨站）、POST/结果内容零日志；页面随包分发。
  */
 import http from 'node:http'
 import crypto from 'node:crypto'
@@ -18,18 +19,19 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
-import { saveConfig, DEFAULT_SCHOOL, DEFAULT_API_BASE } from './config.js'
-import { clearSession } from './session.js'
 
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000
 const MAX_BODY_BYTES = 64 * 1024
+const DEFAULT_MAX_ATTEMPTS = 3
+// 终结性结果（成功/上限耗尽）发出后留给页面的收尾窗口
+const RESULT_LINGER_MS = 10 * 1000
 
 function loginPageHtml() {
   const here = path.dirname(fileURLToPath(import.meta.url))
   return fs.readFileSync(path.join(here, 'web', 'login.html'), 'utf8')
 }
 
-/** 枚举本机局域网 IPv4（排除回环/内网虚拟网段由调用方展示时全列） */
+/** 枚举本机局域网 IPv4（虚拟网段在内，展示侧由调用方取舍） */
 export function lanAddresses() {
   const result = []
   const interfaces = os.networkInterfaces()
@@ -52,16 +54,37 @@ function isIpLiteralHost(host) {
  * 起本地登录服务。
  * @param {object} options
  * @param {boolean} options.qr 二维码模式：绑 0.0.0.0（含 127.0.0.1）；默认仅 127.0.0.1
- * @param {(result: {ok: boolean, userId?: string, error?: string}) => void} options.onSubmit 凭据落盘回调
- * @param {number} options.timeoutMs 超时自动关闭
- * @returns {Promise<{server, port, token, urls: {local: string, lan: string[]}, close: () => void}>}
+ * @param {number} options.timeoutMs 超时自动关闭（会话最长时长）
+ * @param {number} options.maxAttempts 提交尝试上限（默认 3）
+ * @param {(userId: string, password: string) => Promise<{ok: true, summary: object} | {ok: false, kind: 'credential'|'service', message: string}>} options.verify
+ *   验证回调：执行完整教务登录验证；成功路径内完成凭据落盘（0600），
+ *   失败路径不得写任何凭据文件。kind 区分「凭据错误」（页内重试）
+ *   与「网络/识别服务失败」（稍后再试）。
+ * @param {(event: {type: string, [k: string]: any}) => void} options.onEvent
+ *   终端汇报事件：submitted / success / credential-error / service-error /
+ *   attempts-exhausted / timeout
+ * @returns {Promise<{server, port, token, urls, close: () => void, done: Promise<{type: string}>, attempts: () => number}>}
  */
-export function startLoginServer({ qr = false, timeoutMs = DEFAULT_TIMEOUT_MS, onSubmit } = {}) {
+export function startLoginServer({
+  qr = false,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+  maxAttempts = DEFAULT_MAX_ATTEMPTS,
+  verify,
+  onEvent = () => {},
+} = {}) {
   return new Promise((resolve, reject) => {
     const token = crypto.randomBytes(16).toString('hex')
     const pageHtml = loginPageHtml()
-    let tokenUsed = false
+    let sessionOpen = true // 令牌会话有效性：成功/超时/上限耗尽即 false
+    let attempts = 0
+    let verifying = false
+    let lastResult = null // {type:'success'|'credential'|'service', ...}
+    let resultAcked = false
     let closed = false
+    let doneResolve
+    const done = new Promise((r) => {
+      doneResolve = r
+    })
 
     const server = http.createServer((req, res) => {
       const url = new URL(req.url, 'http://placeholder')
@@ -70,16 +93,17 @@ export function startLoginServer({ qr = false, timeoutMs = DEFAULT_TIMEOUT_MS, o
         res.end(JSON.stringify(payload))
       }
 
-      // 防 DNS rebinding：Host 必须是 IP 字面量
       if (!isIpLiteralHost(req.headers.host)) {
         sendJson(403, { ok: false, error: '非法 Host' })
         return
       }
 
+      const tokenOk = () => sessionOpen && url.searchParams.get('t') === token
+
       if (req.method === 'GET' && url.pathname === '/') {
-        if (tokenUsed || url.searchParams.get('t') !== token) {
+        if (!tokenOk()) {
           res.writeHead(403, { 'Content-Type': 'text/html;charset=utf-8' })
-          res.end('<meta charset="utf-8"><p>链接无效或已使用：请回到终端重新运行 linke login。</p>')
+          res.end('<meta charset="utf-8"><p>链接无效或已失效：请回到终端重新运行 linke login。</p>')
           return
         }
         res.writeHead(200, { 'Content-Type': 'text/html;charset=utf-8' })
@@ -87,15 +111,49 @@ export function startLoginServer({ qr = false, timeoutMs = DEFAULT_TIMEOUT_MS, o
         return
       }
 
-      if (req.method === 'POST' && url.pathname === '/submit') {
-        // 防 CSRF：浏览器提交必带 Origin，存在则必须同源
-        const origin = req.headers.origin
-        if (origin) {
-          const host = req.headers.host
-          if (origin !== `http://${host}`) {
-            sendJson(403, { ok: false, error: '非法来源' })
-            return
+      if (req.method === 'GET' && url.pathname === '/result') {
+        // 结果轮询只校验令牌匹配：成功/上限后令牌会话已结束，但结果
+        // 仍须让页面取走（提交路径此时已被 sessionOpen 拒绝，无重放面）
+        if (url.searchParams.get('t') !== token) {
+          sendJson(403, { ok: false, error: '令牌错误' })
+          return
+        }
+        if (lastResult) {
+          const terminal =
+            lastResult.type === 'success' ||
+            (lastResult.type !== 'success' && lastResult.final)
+          const payload = { status: 'done', ...lastResult }
+          if (terminal && !resultAcked) {
+            resultAcked = true
+            // 页面已收到终结性结果：短暂延迟后收摊
+            setTimeout(closeServer, 1000)
           }
+          sendJson(200, payload)
+          return
+        }
+        sendJson(200, { status: verifying ? 'verifying' : 'idle' })
+        return
+      }
+
+      if (req.method === 'POST' && url.pathname === '/submit') {
+        const origin = req.headers.origin
+        if (origin && origin !== `http://${req.headers.host}`) {
+          sendJson(403, { ok: false, error: '非法来源' })
+          return
+        }
+        // 令牌经请求体传递（页面为相对路径提交，URL 无 query），
+        // 此处只先校验会话有效性，令牌匹配在解析 body 后校验
+        if (!sessionOpen) {
+          sendJson(403, { ok: false, error: '会话已结束，请重新运行 linke login' })
+          return
+        }
+        if (verifying) {
+          sendJson(409, { ok: false, error: '正在验证上一次提交，请稍候' })
+          return
+        }
+        if (attempts >= maxAttempts) {
+          sendJson(429, { ok: false, error: `已达尝试上限（${maxAttempts} 次）` })
+          return
         }
         const chunks = []
         let size = 0
@@ -108,10 +166,6 @@ export function startLoginServer({ qr = false, timeoutMs = DEFAULT_TIMEOUT_MS, o
           chunks.push(chunk)
         })
         req.on('end', () => {
-          if (tokenUsed) {
-            sendJson(403, { ok: false, error: '令牌已使用，请重新运行 linke login' })
-            return
-          }
           let body
           try {
             body = JSON.parse(Buffer.concat(chunks).toString('utf8'))
@@ -129,19 +183,62 @@ export function startLoginServer({ qr = false, timeoutMs = DEFAULT_TIMEOUT_MS, o
             sendJson(400, { ok: false, error: '学号与密码均不能为空' })
             return
           }
-          // 令牌一次性：无论后续结果如何，本令牌立即作废
-          tokenUsed = true
-          saveConfig({
-            school: DEFAULT_SCHOOL,
-            userId,
-            password,
-            apiBase: DEFAULT_API_BASE,
-          })
-          clearSession() // 凭据变更后旧 session 作废
-          // 注意：此处不打印/记录 body 任何内容（凭据红线）
-          sendJson(200, { ok: true })
-          onSubmit && onSubmit({ ok: true, userId })
-          closeServer()
+          // 计数在任何验证发生前完成：提交即视为一次教务尝试（保守口径）
+          attempts += 1
+          const remaining = maxAttempts - attempts
+          verifying = true
+          lastResult = null
+          resultAcked = false
+          sendJson(200, { ok: true, attempts, remaining })
+          onEvent({ type: 'submitted', attempts, remaining, userId })
+          // 注意：此处不打印/记录凭据（红线）
+          Promise.resolve()
+            .then(() => verify(userId, password))
+            .then((outcome) => {
+              verifying = false
+              if (outcome && outcome.ok) {
+                sessionOpen = false // 令牌会话结束（验收 3）
+                lastResult = {
+                  type: 'success',
+                  summary: outcome.summary || {},
+                  maxAttempts,
+                }
+                onEvent({ type: 'success', summary: outcome.summary, userId })
+              } else {
+                const kind = outcome && outcome.kind === 'credential' ? 'credential' : 'service'
+                const final = remaining <= 0
+                lastResult = {
+                  type: kind,
+                  message: (outcome && outcome.message) || '验证失败',
+                  remaining,
+                  final,
+                  maxAttempts,
+                }
+                onEvent({ type: kind === 'credential' ? 'credential-error' : 'service-error', message: lastResult.message, remaining, final, userId })
+                if (final) {
+                  sessionOpen = false
+                  scheduleForceClose()
+                  onEvent({ type: 'attempts-exhausted', attempts })
+                }
+              }
+            })
+            .catch((err) => {
+              verifying = false
+              const final = remaining <= 0
+              lastResult = {
+                type: 'service',
+                message: (err && err.message) || '验证过程异常',
+                remaining,
+                final,
+                maxAttempts,
+              }
+              onEvent({ type: 'service-error', message: lastResult.message, remaining, final, userId })
+              if (final) {
+                sessionOpen = false
+                scheduleForceClose()
+                onEvent({ type: 'attempts-exhausted', attempts })
+              }
+            })
         })
         return
       }
@@ -149,18 +246,30 @@ export function startLoginServer({ qr = false, timeoutMs = DEFAULT_TIMEOUT_MS, o
       sendJson(404, { ok: false, error: 'Not Found' })
     })
 
+    let lingerHandle = null
+    let timeoutHandle = null
+
     const closeServer = () => {
       if (closed) return
       closed = true
       clearTimeout(timeoutHandle)
-      // keep-alive 空闲连接会阻止 close 生效，强制断开
+      clearTimeout(lingerHandle)
       if (typeof server.closeAllConnections === 'function') server.closeAllConnections()
       server.close()
+      sessionOpen = false
+      doneResolve({ type: 'closed' })
     }
 
-    const timeoutHandle = setTimeout(() => {
+    // 终结性失败结果若始终无人来取（页面已关等），超窗强制收摊
+    const scheduleForceClose = () => {
+      clearTimeout(lingerHandle)
+      lingerHandle = setTimeout(closeServer, RESULT_LINGER_MS)
+    }
+
+    timeoutHandle = setTimeout(() => {
+      onEvent({ type: 'timeout' })
+      sessionOpen = false
       closeServer()
-      onSubmit && onSubmit({ ok: false, error: 'timeout' })
     }, timeoutMs)
 
     server.on('error', reject)
@@ -176,6 +285,8 @@ export function startLoginServer({ qr = false, timeoutMs = DEFAULT_TIMEOUT_MS, o
         token,
         urls,
         close: closeServer,
+        done,
+        attempts: () => attempts,
       })
     })
   })
