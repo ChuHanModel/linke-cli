@@ -85,3 +85,15 @@ test('ops.log 独立测试：appendOpsLog 追加格式与权限', () => {
     fs.rmSync(tmp, { recursive: true, force: true })
   }
 })
+
+test('T22：预览输出含维度名与分值含义（内容价值/管理轻松度/良师指数）', async () => {
+  // 源码断言：starsLabel 被写命令预览使用，且含全部三个维度名与分值文案
+  const bin = fs.readFileSync(path.join(here, '..', 'src', 'bin.js'), 'utf8')
+  assert.ok(bin.includes("'内容价值'"), '维度常量 内容价值 在位')
+  assert.ok(bin.includes("'管理轻松度'"), '维度常量 管理轻松度 在位')
+  assert.ok(bin.includes("'良师指数'"), '维度常量 良师指数 在位')
+  assert.ok(bin.includes("'很好'") && bin.includes("'很差'"), '分值文案在位')
+  assert.ok(/previewText:[\s\S]{0,200}starsLabel\(stars\)/.test(bin.slice(bin.indexOf("case 'comment-post'"))), 'comment-post 预览使用 starsLabel')
+  // target 不再截断（全文进审计）
+  assert.ok(!/text\.slice\(0,\s*30\)/.test(bin), '预览/审计文本不再截断 30 字')
+})

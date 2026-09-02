@@ -76,9 +76,10 @@ const USAGE = `linke —— 林课教务 CLI（只读查询，供 agent / 人类
   linke course-search <关键词>                          林课课程库检索（22k 用户共建数据）
   linke course-stats <课程名或编号>                      课程给分统计（人数/均分/箱线图五数/挂科率）
   linke rankings [--by star|score] [--limit 20]         林课榜单（评分榜/给分榜）
-  linke comment-post <课程> --stars 5,4,3 --text ...    发布评课（两段式：先预览，
-                                                        --confirm 才发布，全校可见）
-  linke comment-update <课程> --stars ... --text ...    修改自己的评课（--confirm）
+  linke comment-post <课程> --stars 5,4,3 --text ...    发布评课（--stars 依次=内容价值/管理
+                                                        轻松度/良师指数，1-5=很差~很好；两段式：先
+                                                        预览，--confirm 才发布，全校可见）
+  linke comment-update <课程> --stars ... --text ...    修改自己的评课（stars 语义同上；--confirm）
   linke comment-delete <课程>                           删除自己的评课（--confirm）
   linke collect / uncollect <课程>                      收藏 / 取消收藏（--confirm）
   linke like <评论ID>                                   给评论点赞（--confirm）
@@ -675,9 +676,12 @@ async function cmdComments(query, flags) {
     callAppApiSafe('App.CourseComment.GetCourseRating', { courseId }, config),
     callLinkeApi(config, 'App.CourseComment.GetComment', { courseId, page, pageSize: '20' }),
   ])
+  // 评课三星维度标注（T22：commentStar1/2/3 = 内容价值/管理轻松度/良师指数，1-5=很差~很好）
+  const starDimensions = STAR_DIMENSIONS.map(([field, name]) => ({ field, name }))
   emitJson({
     query,
     course: { courseId, lessonName: first.lessonName || first.courseName || '' },
+    starDimensions,
     commentCount: count,
     rating,
     comments,
@@ -752,10 +756,22 @@ async function cmdWriteOp(op, flags, build) {
   return 0
 }
 
+/** 评课三星维度（App 端 evaluateGuide.vue 权威定义，T22 显性化） */
+const STAR_DIMENSIONS = [
+  ['commentStar1', '内容价值'],
+  ['commentStar2', '管理轻松度'],
+  ['commentStar3', '良师指数'],
+]
+const STAR_SCALE = { 1: '很差', 2: '较差', 3: '一般', 4: '较好', 5: '很好' }
+
+function starsLabel(stars) {
+  return STAR_DIMENSIONS.map(([, name], i) => `${name}：${stars[i]}（${STAR_SCALE[stars[i]]}）`).join(' / ')
+}
+
 function parseStars(raw) {
   const parts = String(raw || '').split(/[,,]/).map((x) => Number(x.trim()))
   if (parts.length !== 3 || parts.some((n) => !Number.isInteger(n) || n < 1 || n > 5)) {
-    throw new Error('--stars 需为三个 1-5 整数（如 5,4,3，对应三星维度）')
+    throw new Error('--stars 需为三个 1-5 整数，依次对应：内容价值 / 管理轻松度 / 良师指数（1=很差 2=较差 3=一般 4=较好 5=很好；如 5,4,3）')
   }
   return parts
 }
@@ -767,7 +783,8 @@ async function cmdMyComments(flags) {
   if (course) {
     const target = await resolveCourseId(config, course)
     const data = await callLinkeApi(config, 'App.CourseComment.GetMyComment', { courseId: target.courseId })
-    emitJson({ course: target.name, myComment: data })
+    const starDimensions = STAR_DIMENSIONS.map(([field, name]) => ({ field, name }))
+    emitJson({ course: target.name, starDimensions, myComment: data })
     return 0
   }
   emitJson({ note: '按课程查询请加 --course <课程名>（「我评过的全部课」后端未提供全量接口，App 端「我的」页同源口径）' })
@@ -1147,11 +1164,11 @@ async function dispatch(argv) {
           params: { courseId: target.courseId, commentStar1: stars[0], commentStar2: stars[1], commentStar3: stars[2], commentMessage: text },
           previewText: [
             `课程：${target.name}${target.others ? `（另有 ${target.others} 个同名候选，按第一个执行）` : ''}`,
-            `星级：${stars.join(' / ')}（三星维度）`,
+            `星级：${starsLabel(stars)}`,
             `评语：${text}`,
           ],
           consequence: '评课将公开发布，全校可见，并计入课程评分统计',
-          target: `course=${target.courseId} stars=${stars.join(',')} text=${text.slice(0, 30)}`,
+          target: `course=${target.courseId} stars=${stars.join(',')} text=${text}`,
         }
       })
     }
@@ -1166,9 +1183,9 @@ async function dispatch(argv) {
         return {
           service: 'App.CourseComment.UpdateComment',
           params: { courseId: target.courseId, commentStar1: stars[0], commentStar2: stars[1], commentStar3: stars[2], commentMessage: text },
-          previewText: [`课程：${target.name}`, `新星级：${stars.join(' / ')}`, `新评语：${text}`],
+          previewText: [`课程：${target.name}`, `新星级：${starsLabel(stars)}`, `新评语：${text}`],
           consequence: '将覆盖你在该课程的既有评课（公开发布，全校可见）',
-          target: `course=${target.courseId} stars=${stars.join(',')} text=${text.slice(0, 30)}`,
+          target: `course=${target.courseId} stars=${stars.join(',')} text=${text}`,
         }
       })
     }
