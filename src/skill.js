@@ -1,7 +1,7 @@
 /**
  * skill 说明书分发（T3 验收 5）：把随包分发的 SKILL.md 安装进
  * 用户 agent 的 skills 目录。skill 保持极薄——只描述如何 shell 调用
- * CLI，复杂度全部在 CLI 内（lark-cli 架构口径）。
+ * CLI，复杂度全部在 CLI 内。
  */
 import fs from 'node:fs'
 import os from 'node:os'
