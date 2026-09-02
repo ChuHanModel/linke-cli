@@ -197,6 +197,7 @@ export function startLoginServer({
           }
           const userId = String(body.userId || '').trim()
           const password = String(body.password || '')
+          const syncChoice = body.syncChoice === 'off' ? 'off' : 'on' // T23 首启必答
           if (!userId || !password) {
             sendJson(400, { ok: false, error: '学号与密码均不能为空' })
             return
@@ -211,7 +212,7 @@ export function startLoginServer({
           onEvent({ type: 'submitted', attempts, remaining, userId })
           // 注意：此处不打印/记录凭据（红线）
           Promise.resolve()
-            .then(() => verify(userId, password))
+            .then(() => verify(userId, password, syncChoice))
             .then((outcome) => {
               verifying = false
               if (outcome && outcome.ok) {

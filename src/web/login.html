@@ -33,6 +33,11 @@
     border-radius: 8px; background: #2da44e; color: #fff; cursor: pointer;
   }
   button:disabled { opacity: .6; cursor: default; }
+  .sync-block { margin-top: 18px; padding: 12px; border: 1px solid #d0d7de; border-radius: 8px; }
+  @media (prefers-color-scheme: dark) { .sync-block { border-color: #3a4149; } }
+  .sync-label { display: inline-block; margin: 0 12px 6px 0; font-size: 14px; cursor: pointer; }
+  .sync-note { font-size: 12px; color: #6a737d; line-height: 1.6; margin: 4px 0 0; }
+  @media (prefers-color-scheme: dark) { .sync-note { color: #9aa4af; } }
   .msg { margin-top: 16px; font-size: 13px; line-height: 1.7; display: none; white-space: pre-line; }
   .msg.cred { display: block; color: #cf222e; }
   .msg.svc { display: block; color: #9a6700; }
@@ -69,6 +74,11 @@
       <input id="userId" name="userId" autocomplete="username" inputmode="numeric" required>
       <label for="password">教务密码</label>
       <input id="password" name="password" type="password" autocomplete="current-password" required>
+      <div class="sync-block">
+        <label class="sync-label"><input type="radio" name="syncChoice" value="on" checked> 参与给分统计（推荐）</label>
+        <label class="sync-label"><input type="radio" name="syncChoice" value="off"> 不参与</label>
+        <p class="sync-note">参与＝你的课程成绩匿名汇总到林课服务器，用于课程给分统计与排行榜，帮助同学选课。选「不参与」不影响任何功能，之后想改随时可以（本页面重新登录一次即可）。</p>
+      </div>
       <button id="btn" type="submit">登录</button>
     </form>
     <p id="msg" class="msg"></p>
@@ -199,7 +209,8 @@
         body: JSON.stringify({
           token,
           userId: userIdInput.value.trim(),
-          password: passwordInput.value
+          password: passwordInput.value,
+          syncChoice: (document.querySelector('input[name="syncChoice"]:checked') || {}).value || 'on'
         })
       })
       const data = await res.json()

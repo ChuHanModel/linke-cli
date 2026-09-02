@@ -149,19 +149,7 @@ async function cmdConfig(flags) {
         progress('--sync 只支持 on|off')
         return 1
       }
-      if (v === 'on' && existing.sync !== true) {
-        // 首次开启：三要素同意流程（T18 五红线之一）
-        progress('开启成绩回流前请确认以下三要素：')
-        progress('  · 上传什么：你的课程成绩与学号标识（userKey 匿名摘要）')
-        progress('  · 去哪里：林课服务器（api.linketeam.com）')
-        progress('  · 用来干嘛：汇入课程给分统计与排行榜，帮助其他同学选课')
-        const { ask } = await import('./prompt.js')
-        const answer = await ask('同意并开启？（输入 y 确认）: ')
-        if (answer.toLowerCase() !== 'y') {
-          progress('已取消，保持关闭')
-          return 0
-        }
-      }
+      // T23 默认开：off/on 均为直接切换（知情告知由首启 notice 与 login 页承担）
       updates.sync = v === 'on'
     }
     saveConfig({ ...loadConfigRaw(), ...updates })
@@ -247,12 +235,14 @@ function pickPrimaryLanUrl(urls) {
  * 半成品文件。导出供测试注入 fake 适配器验证分类与落盘纪律。
  */
 export function createVerifyCredentials({ school = DEFAULT_SCHOOL, apiBase = DEFAULT_API_BASE } = {}) {
-  return async function verifyCredentials(userId, password) {
+  return async function verifyCredentials(userId, password, syncChoice) {
     const config = { school, userId, password, apiBase }
     const adapter = getAdapter(school)
     try {
       const session = await forceLogin(adapter, config) // 内部含 saveSession
-      saveConfig(config) // 验证通过才落盘
+      // T23 首启必答：login 页选择随凭据落盘（不选=默认 on）
+      const finalConfig = syncChoice === 'off' ? { ...config, sync: false } : { ...config, sync: true }
+      saveConfig(finalConfig) // 验证通过才落盘
       const info = session.userInfo || {}
       return {
         ok: true,
@@ -361,6 +351,7 @@ async function cmdScores(flags) {
     adapter.fetchScores(session.cookie, { term })
   )
   emitJson(rows)
+  await maybeSyncScores(config, rows) // T23 全量回流（JSON 已输出后；默认开可关）
   return 0
 }
 
@@ -387,7 +378,7 @@ async function cmdCredits() {
     adapter.fetchCredits(session.cookie)
   )
   emitJson(credits)
-  await maybeSyncScores(config, credits) // T18 opt-in 回流（JSON 已输出后进行）
+  // T23：回流口径升级为 scores 全量（credits 明细为子集，不再单独触发）
   return 0
 }
 
@@ -698,30 +689,89 @@ async function callAppApiSafe(service, params, config) {
   }
 }
 
-/** T18 成绩回流（opt-in；仅 credits 命令触发；hash 无变化不传） */
-async function maybeSyncScores(config, creditsResult) {
+/**
+ * T23 成绩回流（全量口径，默认开+可关）：scores 命令触发——
+ * 全量成绩 + 按学期拉选退课日志（xk-logs）取课程号→教师映射，
+ * 本地构造 courseId=md5(课程名+教师)（App 端 utils/md5 同源），
+ * 上行 ImportScoresFromCourseList；md5 全量集防重传；off 即关。
+ * userKey 现算不落盘不写日志。
+ */
+async function maybeSyncScores(config, scoresRows) {
   const raw = loadConfigRaw()
-  if (raw.sync !== true) return // 默认关闭
+  if (raw.sync === false) return // T23 默认开：仅显式 off 关闭
   try {
     const fs = await import('node:fs')
     const os = await import('node:os')
     const pathMod = await import('node:path')
     const crypto = await import('node:crypto')
     const statePath = pathMod.join(os.homedir(), '.linke-cli', 'sync-state.json')
-    const payload = [{ courses: creditsResult.courses || [] }]
+    // 教师映射：遍历成绩涉及的学期拉选退课日志（频次=学期数）
+    const terms = [...new Set((scoresRows || []).map((r) => r.term).filter(Boolean))]
+    const teacherMap = {}
+    const { getAdapter } = await import('./schools/registry.js')
+    const adapter = getAdapter(config.school)
+    await withSession(config, async (_adapter, session) => {
+      for (const term of terms.slice(0, 8)) {
+        try {
+          const logs = await adapter.fetchXkLogs(session.cookie, { term })
+          const idxCode = logs.headers.findIndex((h) => h.includes('课程号'))
+          const idxTeacher = logs.headers.findIndex((h) => h.includes('上课教师'))
+          if (idxCode < 0 || idxTeacher < 0) continue
+          for (const row of logs.rows) {
+            const code = (row[idxCode] || '').trim()
+            const teacher = (row[idxTeacher] || '').trim()
+            if (code && teacher && !teacherMap[code]) teacherMap[code] = teacher
+          }
+        } catch {
+          /* 单学期失败不阻塞整体回流 */
+        }
+      }
+    })
+    // 构造 (courseId, score, term) 全量对——仅数值成绩与可匹配教师
+    const payload = (scoresRows || [])
+      .filter((r) => r.score !== null && r.score !== undefined && r.courseName)
+      .map((r) => {
+        const teacher = teacherMap[r.courseCode] || ''
+        const courseId = teacher
+          ? crypto.createHash('md5').update(String(r.courseName) + String(teacher)).digest('hex')
+          : ''
+        return courseId ? { courseId, score: r.score, term: r.term || '' } : null
+      })
+      .filter(Boolean)
     const hash = crypto.createHash('md5').update(JSON.stringify(payload)).digest('hex')
     let state = {}
     try { state = JSON.parse(fs.readFileSync(statePath, 'utf8')) } catch {}
-    if (state.hash === hash) return // 无变化不重传
+    if (state.hash === hash) return // 全量集无变化不重传
     const { callLinkeApi } = await import('./linkeapi.js')
-    const result = await callLinkeApi(config, 'App.UserScore.ImportScoresFromCredit', {
-      creditData: payload,
+    const result = await callLinkeApi(config, 'App.UserScore.ImportScoresFromCourseList', {
+      scores: JSON.stringify(payload),
     })
     fs.mkdirSync(pathMod.dirname(statePath), { recursive: true })
-    fs.writeFileSync(statePath, JSON.stringify({ hash, syncedAt: new Date().toISOString() }))
-    progress(`成绩回流完成（opt-in，可用 linke config --sync off 关闭）: ${JSON.stringify(result).slice(0, 120)}`)
+    fs.writeFileSync(statePath, JSON.stringify({ hash, syncedAt: new Date().toISOString(), informed: state.informed }))
+    progress(`成绩回流完成（全量 ${payload.length} 门参与给分统计；不参与可 linke config --sync off）: ${JSON.stringify(result).slice(0, 100)}`)
   } catch (err) {
     progress(`成绩回流失败（不影响查询结果）: ${err.message}`)
+  }
+}
+
+/** T23 首启知情告知（一次性；sync-state.json 无 informed 标记时） */
+async function maybeFirstRunNotice() {
+  const raw = loadConfigRaw()
+  if (raw.sync === false) return
+  try {
+    const fs = await import('node:fs')
+    const os = await import('node:os')
+    const pathMod = await import('node:path')
+    const statePath = pathMod.join(os.homedir(), '.linke-cli', 'sync-state.json')
+    let state = {}
+    try { state = JSON.parse(fs.readFileSync(statePath, 'utf8')) } catch {}
+    if (state.informed) return
+    progress('本机默认参与课程给分统计（匿名汇总）：上传课程成绩与学号标识 → 林课服务器 → 用于给分统计与排行榜，帮助同学选课。')
+    progress('不参与不影响任何功能：linke config --sync off 即可关闭（本提示只出现一次）。')
+    fs.mkdirSync(pathMod.dirname(statePath), { recursive: true })
+    fs.writeFileSync(statePath, JSON.stringify({ ...state, informed: true }))
+  } catch {
+    /* 告知失败静默 */
   }
 }
 
@@ -816,6 +866,7 @@ async function cmdPendingReviews(flags) {
   emitJson({ note: '已修读课程列表（待评价口径与 App 端评价页同源；按 courseTerm 过滤）', courses: data })
   return 0
 }
+
 
 async function cmdNotices(flags) {
   // T17 双源现场获取（用户拍板：数据面零后端依赖——不经林课后端，
@@ -1035,6 +1086,9 @@ export async function runCli(argv) {
   try {
     // T16 透明更新钩子（update/help 自身与 JSON 输出无碍：一切走 stderr）
     const first = String(argv.find((a) => !a.startsWith('--')) || '')
+    if (resolveConfig() && !['update', 'help', 'skill', 'config'].includes(first)) {
+      await maybeFirstRunNotice() // T23 首启知情告知（一次性）
+    }
     if (!['update', 'help', 'skill', 'config'].includes(first)) {
       const { maybeAutoUpdate } = await import('./updater.js')
       const { version } = JSON.parse(

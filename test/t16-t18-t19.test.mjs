@@ -57,17 +57,17 @@ test('computeUserKey 输出 32 位十六进制；userKey 不写入 config（现�
   assert.ok(!cfgSrc.includes('userKey'), 'config.js 不得持久化 userKey')
 })
 
-test('回流默认关：默认配置无 sync 字段；maybeSyncScores 仅 sync===true 才上行（源码断言）', async () => {
+test('T23 回流默认开：仅显式 sync===false 关闭（源码断言）+ off 即关', async () => {
   const bin = fs.readFileSync(path.join(here, '..', 'src', 'bin.js'), 'utf8')
   const fn = bin.slice(bin.indexOf('async function maybeSyncScores'))
-  assert.ok(fn.includes('raw.sync !== true'), '必须显式 opt-in 才上行')
+  assert.ok(fn.includes("raw.sync === false"), 'T23 语义：仅显式 off 才不上行（缺省=参与）')
 })
 
-test('成绩回流同意流程：首次开启打印三要素（上传什么/去哪/干嘛用）', () => {
+test('T23：三要素知情告知由首启 notice 承担（默认开+可关替代旧同意流程）', () => {
   const bin = fs.readFileSync(path.join(here, '..', 'src', 'bin.js'), 'utf8')
-  const seg = bin.slice(bin.indexOf("flags.sync !== undefined"), bin.indexOf('if (flags.clear)'))
-  assert.ok(seg.includes('上传什么') && seg.includes('去哪里') && seg.includes('用来干嘛'), '三要素文案齐全')
-  assert.ok(seg.includes("!== 'y'") || seg.includes("=== 'y'"), '必须显式确认')
+  const fn = bin.slice(bin.indexOf('async function maybeFirstRunNotice'), bin.indexOf('\nasync function', bin.indexOf('async function maybeFirstRunNotice') + 10))
+  assert.ok(fn.includes('课程成绩') && fn.includes('林课服务器') && fn.includes('给分统计与排行榜'), '三要素（上传什么/去哪/干嘛用）在首启告知中')
+  assert.ok(fn.includes('--sync off'), '关闭方法在位')
 })
 
 // ---------- T19 二期B ----------
