@@ -102,7 +102,11 @@
   const success = document.getElementById('success')
   const userIdInput = document.getElementById('userId')
   const passwordInput = document.getElementById('password')
+  const PROXY_HINT = '若本机运行 Clash / Stash / Surge 等代理或 TUN 工具，' +
+    '可能拦截了 localhost 请求——请为 localhost 加直连规则或暂时关闭后重试'
   let polling = null
+  let pollFailures = 0
+  let submittedOnce = false
 
   function showForm() {
     form.style.display = ''
@@ -123,6 +127,33 @@
     success.style.display = 'block'
     document.getElementById('okInfo').textContent = info
   }
+  function showBanner(text) {
+    msg.className = 'msg svc'
+    msg.textContent = text
+  }
+  function clearBanner() {
+    if (!submittedOnce || polling) { msg.className = 'msg' }
+  }
+  function renderFailResult(data) {
+    // 失败结果：回到表单（凭据错误重输 / 服务错误保留输入重发）
+    showForm()
+    if (data.type === 'credential') {
+      msg.className = 'msg cred'
+      msg.textContent = '教务返回：' + (data.message || '账号或密码错误') + '。\n' +
+        '⚠️ 连续输错密码可能导致教务账号被锁定，请确认后重试' +
+        (data.remaining > 0 ? '（剩余 ' + data.remaining + ' 次尝试机会）。' : '。')
+    } else {
+      msg.className = 'msg svc'
+      msg.textContent = (data.message || '网络或验证码识别服务异常') + '。\n' +
+        '这通常与账号密码无关，稍后重试即可' +
+        (data.remaining > 0 ? '（剩余 ' + data.remaining + ' 次）' : '') + '。'
+    }
+    if (data.final) {
+      btn.disabled = true
+      btn.textContent = '已达尝试上限'
+      msg.textContent += '\n已达尝试上限（' + data.maxAttempts + ' 次），本服务即将关闭；请回终端重新运行 linke login。'
+    }
+  }
 
   async function pollResult() {
     try {
@@ -131,14 +162,21 @@
       })
       if (res.status === 403) {
         stopPoll()
+        submittedOnce = false
         msg.className = 'msg svc'
-        msg.textContent = '会话已结束（成功或超时）。请回终端查看结果；如需重新配置请重新运行 linke login。'
+        msg.textContent = '登录服务已结束（成功、超时或达尝试上限）。\n' +
+          '请回终端查看结果；如需重新配置，请在终端重新运行 linke login。'
         showForm()
+        btn.disabled = true
+        btn.textContent = '会话已结束'
         return
       }
       const data = await res.json()
+      pollFailures = 0
+      clearBanner()
       if (data.status === 'verifying' || data.status === 'idle') return
       stopPoll()
+      submittedOnce = false
       if (data.type === 'success') {
         const s = data.summary || {}
         const lines = []
@@ -148,27 +186,16 @@
         showSuccess(lines.length ? lines.join('\n') : '教务登录验证通过，凭据已保存。')
         return
       }
-      // 失败：回到表单
-      showForm()
-      if (data.type === 'credential') {
-        msg.className = 'msg cred'
-        msg.textContent = '教务返回：' + (data.message || '账号或密码错误') + '。\n' +
-          '⚠️ 连续输错密码可能导致教务账号被锁定，请确认后重试' +
-          (data.remaining > 0 ? '（剩余 ' + data.remaining + ' 次尝试机会）。' : '。')
-      } else {
-        msg.className = 'msg svc'
-        msg.textContent = (data.message || '网络或验证码识别服务异常') + '。\n' +
-          '这通常与账号密码无关，稍后重试即可' +
-          (data.remaining > 0 ? '（剩余 ' + data.remaining + ' 次）' : '') +
-          '。'
-      }
-      if (data.final) {
-        btn.disabled = true
-        btn.textContent = '已达尝试上限'
-        msg.textContent += '\n已达尝试上限（' + data.maxAttempts + ' 次），本服务即将关闭；请回终端重新运行 linke login。'
-      }
+      renderFailResult(data)
     } catch {
-      /* 网络瞬断继续轮询 */
+      // 轮询失败 ≠ 提交失败（打回验收 9）：静默重试，持续失败才提示，
+      // 且绝不引导重复提交（防占用教务尝试次数）
+      pollFailures += 1
+      if (pollFailures >= 12) {
+        showBanner('与服务联系中断（约 ' + Math.round(pollFailures * 0.8) + ' 秒无响应），仍在自动重试…\n' +
+          '⚠️ 请勿关闭本页或在此重复提交（重复提交会占用教务尝试次数，连续输错可能锁号）。\n' +
+          '可回终端查看验证是否已完成；若终端也已无响应，重新运行 linke login。')
+      }
     }
   }
   function stopPoll() {
@@ -192,18 +219,58 @@
       })
       const data = await res.json()
       if (!data.ok) throw new Error(data.error || '提交失败')
+      submittedOnce = true
       showVerifying()
       passwordInput.value = '' // 提交后即清空，避免长期驻留输入框
       stopPoll()
+      pollFailures = 0
       polling = setInterval(pollResult, 800)
       pollResult()
     } catch (err) {
+      // 提交 POST 失败（与轮询失败分开归因——打回验收 9）
       msg.className = 'msg svc'
-      msg.textContent = '提交失败：' + err.message
+      msg.textContent = '提交失败：无法连接本机登录服务（' + (err.message || '网络异常') + '）。\n' +
+        '本次提交未送达，不会占用教务尝试次数，可稍后重试。\n' + PROXY_HINT + '。'
       btn.disabled = false
       btn.textContent = '验证并保存'
     }
   })
+
+  // 页面（重）加载时恢复上下文（打回验收 11/12）：已提交过则给出
+  // 防重复警示，验证中则直接恢复验证态，避免用户无感重复提交
+  ;(async function restoreState() {
+    try {
+      const res = await fetch('/state?t=' + encodeURIComponent(token))
+      if (res.status === 403) return // 会话结束，保持初始表单（提交会被拒）
+      const state = await res.json()
+      if (state.attempts > 0) {
+        msg.className = 'msg svc'
+        msg.textContent = '本会话已提交 ' + state.attempts + ' 次（上限 ' +
+          state.maxAttempts + '）。为避免教务账号因连续错密码被锁定，' +
+          '请确认凭据后再提交（剩余 ' + state.remaining + ' 次）。'
+      }
+      if (state.status === 'verifying') {
+        showVerifying()
+        submittedOnce = true
+        stopPoll()
+        polling = setInterval(pollResult, 800)
+        pollResult()
+      } else if (state.status === 'done' && state.result) {
+        submittedOnce = false
+        if (state.result.type === 'success') {
+          const s = state.result.summary || {}
+          const lines = []
+          if (s.name) lines.push('姓名：' + s.name)
+          if (s.weekNow) lines.push('当前教学周：第 ' + s.weekNow + ' 周')
+          showSuccess(lines.length ? lines.join('\n') : '教务登录验证通过，凭据已保存。')
+        } else {
+          renderFailResult(state.result)
+        }
+      }
+    } catch {
+      /* /state 获取失败不阻塞初始表单 */
+    }
+  })()
 </script>
 </body>
 </html>

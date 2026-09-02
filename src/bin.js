@@ -208,6 +208,7 @@ async function cmdLogin(flags) {
   const handle = await startLoginServer({ qr, verify: verifyCredentials, onEvent })
   progress('登录页已就绪（提交后网页内完成验证；5 分钟超时，成功或达尝试上限后自动关闭）')
   progress(`本机访问: ${handle.urls.local}`)
+  progress('（该地址仅本机浏览器可用；CLI 运行在远程机器上时，请在那台机器的浏览器中打开）')
   if (qr && handle.urls.lan.length > 0) {
     progress('局域网访问（含会话令牌，勿转发他人）:')
     for (const lan of handle.urls.lan) progress(`  ${lan}`)

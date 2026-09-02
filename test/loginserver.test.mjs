@@ -279,6 +279,55 @@ test('防跨站提交：异源 Origin 被拒', async () => {
   })
 })
 
+test('GET /state：报告 attempts/剩余额度，供页面刷新后恢复上下文（打回验收 11/12）', async () => {
+  await withTempHome(async () => {
+    await withServer(
+      { verify: async () => ({ ok: false, kind: 'credential', message: '账号或密码错误' }) },
+      async (handle) => {
+        const base = `http://127.0.0.1:${handle.port}`
+        // 初始：0 次提交
+        const s0 = await (await fetch(`${base}/state?t=${handle.token}`)).json()
+        assert.deepEqual(
+          { status: s0.status, attempts: s0.attempts, remaining: s0.remaining },
+          { status: 'idle', attempts: 0, remaining: 3 }
+        )
+        // 错令牌 403
+        assert.equal((await fetch(`${base}/state?t=bad`)).status, 403)
+        // 提交一次后：attempts=1
+        await submitAndAwait(handle, 'u', 'wrong')
+        const s1 = await (await fetch(`${base}/state?t=${handle.token}`)).json()
+        assert.equal(s1.status, 'done')
+        assert.equal(s1.attempts, 1)
+        assert.equal(s1.remaining, 2)
+        assert.equal(s1.result.type, 'credential') // 刷新后可恢复失败结果
+      }
+    )
+  })
+})
+
+test('GET /state：验证中状态可被刷新页面感知（恢复验证态依据）', async () => {
+  await withTempHome(async () => {
+    let releaseVerify
+    const gate = new Promise((r) => (releaseVerify = r))
+    await withServer(
+      { verify: () => gate.then(() => ({ ok: false, kind: 'service', message: 'x' })) },
+      async (handle) => {
+        const base = `http://127.0.0.1:${handle.port}`
+        await fetch(`${base}/submit`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token: handle.token, userId: 'u', password: 'p' }),
+        })
+        const mid = await (await fetch(`${base}/state?t=${handle.token}`)).json()
+        assert.equal(mid.status, 'verifying')
+        assert.equal(mid.attempts, 1)
+        releaseVerify()
+        await delay(100) // 排空验证
+      }
+    )
+  })
+})
+
 test('超时自动关闭并回调 timeout', async () => {
   await withTempHome(async () => {
     let submitted = null

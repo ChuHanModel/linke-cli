@@ -59,6 +59,19 @@ stdout 只输出业务 JSON；进度与错误走 stderr。exit code 契约见
 经 `src/schools/registry.js` 暴露统一接口。新增学校 = 新增
 `src/schools/<id>/` 适配器目录并注册。
 
+## 已知问题与排障
+
+- **登录页提交报「Failed to fetch」**：提交未送达本机登录服务。
+  常见原因是本机代理 / TUN 工具（Clash、Stash、Surge 等）劫持了
+  localhost 请求——为 localhost 加直连规则或暂时关闭代理后重试。
+  本次提交未送达，不会占用教务尝试次数。
+- **CLI 运行在远程机器（远程桌面 / SSH）**：`linke login` 打印的
+  127.0.0.1 地址只在**那台机器**的浏览器可用。远程操作时请在被控
+  机器本机打开浏览器；手机填写用 `linke login --qr`（局域网地址）。
+- **怀疑装到旧版本**：若走 npmmirror 等镜像源安装，镜像同步有延迟，
+  可能装到旧版。用 `npm ls -g linke-cli` 核对版本，或
+  `npm install -g linke-cli --registry https://registry.npmjs.org` 指定官方源。
+
 ## 开发
 
 ```bash

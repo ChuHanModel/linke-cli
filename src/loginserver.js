@@ -135,6 +135,24 @@ export function startLoginServer({
         return
       }
 
+      if (req.method === 'GET' && url.pathname === '/state') {
+        // 页面刷新后恢复上下文用（T7 打回验收 11/12）：报告已提交次数
+        // 与剩余额度，让用户在重复提交前看到教务锁号警示。
+        // 与 /result 同口径：终结性结果未被取走前仍可查询。
+        if (url.searchParams.get('t') !== token) {
+          sendJson(403, { ok: false, error: '令牌错误' })
+          return
+        }
+        sendJson(200, {
+          status: lastResult ? 'done' : verifying ? 'verifying' : 'idle',
+          attempts,
+          remaining: Math.max(0, maxAttempts - attempts),
+          maxAttempts,
+          result: lastResult,
+        })
+        return
+      }
+
       if (req.method === 'POST' && url.pathname === '/submit') {
         const origin = req.headers.origin
         if (origin && origin !== `http://${req.headers.host}`) {

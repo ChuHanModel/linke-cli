@@ -1,6 +1,6 @@
 {
   "name": "linke-cli",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "林课 CLI：把山财教务能力（课表/成绩只读查询）封装为本机命令行工具，供用户 agent 通过 shell 调用。登录请求从本机直发教务系统，验证码识别调用林课云端无状态 OCR 接口。",
   "type": "module",
   "bin": {
