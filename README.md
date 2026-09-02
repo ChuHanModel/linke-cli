@@ -14,7 +14,8 @@ linke login                # 首选配置：本机起登录页，自动打开浏
 linke schedule             # 直接用，登录全自动
 ```
 
-要求 Node.js ≥ 18.14，零运行时依赖。
+要求 Node.js ≥ 18.14。除自有共享包 `linke-sdufe`（教务适配器，T24
+抽包与本 CLI 同仓库开发）外零第三方依赖。
 
 `linke login` 的登录页由本机 CLI 提供（仅绑 127.0.0.1 随机端口，页面
 随 npm 包分发可审计）；**提交后在网页内完成教务登录验证**——验证中
@@ -55,9 +56,11 @@ stdout 只输出业务 JSON；进度与错误走 stderr。exit code 契约见
 ## 学校适配器分层
 
 核心命令框架（`src/bin.js`、`src/session.js`）不含任何学校特有逻辑；
-山财全部逻辑收在 `src/schools/sdufe/`（登录流程、页面解析、密码加密），
-经 `src/schools/registry.js` 暴露统一接口。新增学校 = 新增
-`src/schools/<id>/` 适配器目录并注册。
+山财全部逻辑收在共享包 `linke-sdufe`（`packages/sdufe/`，与 Linke App
+同源引用）：登录流程、页面解析、密码加密，经其 registry 暴露统一接口。
+适配器核心不触碰宿主 API（fetch/base64 等经 env 注入，Node 用
+`nodeEnv()`，uni-app 用 `uni.request` 垫片）——CLI 与 App 共用同一份
+教务交互代码。新增学校 = 新增包内 `src/<id>/` 适配器目录并注册。
 
 ## 已知问题与排障
 

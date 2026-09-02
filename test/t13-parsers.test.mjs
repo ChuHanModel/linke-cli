@@ -4,7 +4,8 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { parseSimpleTable } from '../src/schools/sdufe/parsers.js'
+import { parsers } from 'linke-sdufe'
+const { parseSimpleTable } = parsers
 
 function page(tablesHtml, { empty = false } = {}) {
   return `<html><body>${tablesHtml}${empty ? '未查询到数据' : ''}</body></html>`

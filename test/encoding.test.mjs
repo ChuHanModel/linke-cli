@@ -5,7 +5,7 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { computeEncoded } from '../src/schools/sdufe/encoding.js'
+import { computeEncoded } from 'linke-sdufe'
 
 // —— 基准（App 端现役实现，勿改）——
 function computeEncodedBaseline(account, password, seedScode, seedSxh) {

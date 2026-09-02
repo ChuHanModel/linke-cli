@@ -23,7 +23,7 @@ function withTempHome(fn) {
 }
 
 async function setup() {
-  const { registerAdapter } = await import('../src/schools/registry.js')
+  const { registerAdapter } = await import('linke-sdufe')
   const { saveConfig } = await import('../src/config.js')
   const session = await import('../src/session.js')
   saveConfig({ school: 'fake', userId: 'u1', password: 'p1', apiBase: 'https://fake' })
@@ -81,7 +81,7 @@ test('session 中途失效：自动重登一次并重试业务', async () => {
 
 test('登录抛凭据失效错误时冒泡（ LinkeError exit 2）', async () => {
   await withTempHome(async () => {
-    const { registerAdapter } = await import('../src/schools/registry.js')
+    const { registerAdapter } = await import('linke-sdufe')
     const { saveConfig } = await import('../src/config.js')
     const session = await import('../src/session.js')
     saveConfig({ school: 'bad', userId: 'u1', password: 'wrong', apiBase: 'https://fake' })

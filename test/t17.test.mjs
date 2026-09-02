@@ -7,7 +7,8 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { parseJwcNotices, parseMakeupsHtml } from '../src/schools/sdufe/parsers.js'
+import { parsers } from 'linke-sdufe'
+const { parseJwcNotices, parseMakeupsHtml } = parsers
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 

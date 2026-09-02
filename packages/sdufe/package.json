@@ -1,0 +1,33 @@
+{
+  "name": "linke-sdufe",
+  "version": "0.1.0",
+  "description": "山东财经大学强智教务（jw.sdufe.edu.cn）适配器共享包：登录、教务查询与页面解析。linke-cli 与 Linke App 同源引用；教务请求一律从用户设备直发。",
+  "type": "module",
+  "main": "./src/index.js",
+  "exports": {
+    ".": "./src/index.js"
+  },
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "keywords": [
+    "sdufe",
+    "linke",
+    "jw",
+    "kingosoft"
+  ],
+  "engines": {
+    "node": ">=18.14"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ChuHanModel/linke-cli.git",
+    "directory": "packages/sdufe"
+  }
+}

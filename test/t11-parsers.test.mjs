@@ -4,12 +4,8 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import {
-  parsePyfaHtml,
-  parseExamsHtml,
-  parseProgressPlansHtml,
-  parseProgressDetailHtml,
-} from '../src/schools/sdufe/parsers.js'
+import { parsers } from 'linke-sdufe'
+const { parsePyfaHtml, parseExamsHtml, parseProgressPlansHtml, parseProgressDetailHtml } = parsers
 
 // ---------- parsePyfaHtml ----------
 

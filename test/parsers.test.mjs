@@ -5,15 +5,8 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import {
-  parseUserData,
-  hasAuthenticatedProfileMarkers,
-  parseCurrentTerm,
-  parseScheduleHtml,
-  parseScoresHtml,
-  parseCreditsHtml,
-  parseCoursesHtml,
-} from '../src/schools/sdufe/parsers.js'
+import { parsers } from 'linke-sdufe'
+const { parseUserData, hasAuthenticatedProfileMarkers, parseCurrentTerm, parseScheduleHtml, parseScoresHtml, parseCreditsHtml, parseCoursesHtml } = parsers
 import { isJwLoginExpired } from '../src/util.js'
 
 // ---------- isJwLoginExpired ----------

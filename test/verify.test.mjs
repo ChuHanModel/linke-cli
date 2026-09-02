@@ -23,7 +23,7 @@ function withTempHome(fn) {
 }
 
 async function setup(loginBehavior) {
-  const { registerAdapter } = await import('../src/schools/registry.js')
+  const { registerAdapter } = await import('linke-sdufe')
   registerAdapter({
     id: 'fakev',
     name: 'fakev',

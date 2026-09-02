@@ -5,7 +5,10 @@
  */
 import { resolveConfig, saveConfig, clearConfig, redactConfig, DEFAULT_SCHOOL, DEFAULT_API_BASE } from './config.js'
 import { configMissing, LinkeError } from './errors.js'
-import { listAdapters, getAdapter } from './schools/registry.js'
+import { listAdapters, getAdapter, initSdufe, nodeEnv } from 'linke-sdufe'
+
+// 教务适配器经共享包 linke-sdufe 注入（T24：CLI 与 App 同源）
+initSdufe(nodeEnv())
 import {
   withSession,
   login as forceLogin,
@@ -708,7 +711,7 @@ async function maybeSyncScores(config, scoresRows) {
     // 教师映射：遍历成绩涉及的学期拉选退课日志（频次=学期数）
     const terms = [...new Set((scoresRows || []).map((r) => r.term).filter(Boolean))]
     const teacherMap = {}
-    const { getAdapter } = await import('./schools/registry.js')
+    const { getAdapter } = await import('linke-sdufe')
     const adapter = getAdapter(config.school)
     await withSession(config, async (_adapter, session) => {
       for (const term of terms.slice(0, 8)) {
@@ -886,7 +889,7 @@ async function cmdNotices(flags) {
 
   if (effectiveSource !== 'jw') {
     try {
-      const { sdufeAdapter } = await import('./schools/sdufe/adapter.js')
+      const sdufeAdapter = getAdapter('sdufe')
       const scanPages = keyword ? Math.min(MAX_SCAN_PAGES, 5) : page
       let items = []
       const startPage = keyword ? 1 : page

@@ -14,7 +14,7 @@
 import fs from 'node:fs'
 import { sessionPath, configDir } from './config.js'
 import { recognizeCaptcha } from './cloudOcr.js'
-import { getAdapter } from './schools/registry.js'
+import { getAdapter } from 'linke-sdufe'
 import { progress } from './util.js'
 
 const SESSION_TTL_MS = 20 * 60 * 1000

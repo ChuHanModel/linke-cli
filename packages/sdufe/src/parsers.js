@@ -7,8 +7,8 @@
  * - 主页：linke_App/services/auth/jwLoginService.js parseUserData()
  * - 学期：linke_App/utils/scheduleLoader.js fetchScheduleTerm()
  */
-import { stripSpaces, isJwLoginExpired } from '../../util.js'
-import { parseError } from '../../errors.js'
+import { stripSpaces, isJwLoginExpired } from './util.js'
+import { parseError } from './errors.js'
 
 /** 解析个人主页：姓名/单位/专业/班级 + 当前教学周（用于登录确认与 status/成功页展示） */
 export function parseUserData(html) {
