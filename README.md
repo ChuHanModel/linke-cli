@@ -10,19 +10,25 @@ skill 说明书（`skills/linke/SKILL.md`），一条命令装入 agent 的 skil
 
 ```bash
 npm install -g linke-cli   # 或 npx linke-cli <命令>
-linke config               # 交互式录入学号/密码（输入不回显）
+linke login                # 首选配置：本机起登录页，自动打开浏览器（手机填写加 --qr）
 linke schedule             # 直接用，登录全自动
 ```
 
 要求 Node.js ≥ 18.14，零运行时依赖。
 
+`linke login` 的登录页由本机 CLI 提供（仅绑 127.0.0.1 随机端口，页面
+随 npm 包分发可审计）；`--qr` 模式额外在终端展示局域网 URL 二维码
+（含一次性令牌，用后即失效），手机同 Wi-Fi 扫码填写。凭据只落本机，
+不经任何云端。`linke config` 保留为非 TTY / SSH 场景的终端兜底。
+
 ## 命令
 
 | 命令 | 说明 |
 |---|---|
-| `linke config [--clear]` | 录入/清除教务凭据（存 `~/.linke-cli/config.json`，权限 600） |
+| `linke login [--qr]` | 网页配置凭据（首选）；`--qr` 出局域网二维码供手机填写 |
+| `linke config [--clear]` | 终端录入/清除凭据（非 TTY 兜底；存 `~/.linke-cli/`，权限 600） |
+| `linke verify` | 验证已存凭据（自动登录教务并显示身份） |
 | `linke status` | 配置与会话状态（JSON） |
-| `linke login` | 强制重登（平时自动，排障用） |
 | `linke scores [--term 2025-2026-1]` | 成绩（缺省全部学期，JSON） |
 | `linke schedule [--term ...] [--week 3]` | 课表（缺省当前学期全部周，JSON） |
 | `linke schools` | 列出学校适配器 |
