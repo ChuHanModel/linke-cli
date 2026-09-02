@@ -768,3 +768,58 @@ export function parseSimpleTable(html, { emptyText = '未查询到数据', dropF
   }
   return { headers: table.headers, rows: table.rows }
 }
+
+/**
+ * jwc.sdufe.edu.cn 通知公告列表解析（T17 双源之公开源）。
+ * 页面真实形态（zxdt/tzgg.htm）：相对链接
+ *   <a href="../info/1043/5965.htm" target="_blank">标题</a>
+ * 日期在 </a> 后约 120 字符窗口内（PHP Domain/JwNotice.php 备选
+ * 模式同源）；URL 转 https://jwc.sdufe.edu.cn/info/… 绝对地址。
+ * → [{ title, url, date }]
+ */
+export function parseJwcNotices(html, baseUrl = 'https://jwc.sdufe.edu.cn') {
+  const list = []
+  const linkRe = /<a\s+href="([^"]*\/info\/\d+\/\d+\.htm)"[^>]*>([^<]+)<\/a>/g
+  let m
+  while ((m = linkRe.exec(html))) {
+    let url = m[1]
+    if (!/^https?:/i.test(url)) {
+      // "../info/x" 相对于 "/zxdt/tzgg.htm" → "/info/x"
+      url = baseUrl + '/' + url.replace(/^(\.\.\/)+/, '')
+    }
+    const after = html.slice(m.index + m[0].length, m.index + m[0].length + 120)
+    const date = (after.match(/\d{4}-\d{2}-\d{2}/) || [])[0] || ''
+    list.push({ title: m[2].trim(), url, date })
+  }
+  return list
+}
+
+/**
+ * 补考报名页（bkbm_query）形态解析：非报名时间返回文案页
+ * 「当前不在报名时间范围内或未启用报名！」；报名期返回数据表。
+ * → { makeups: [...], note? }（空态带语义注记）
+ */
+export function parseMakeupsHtml(html) {
+  if (typeof html === 'string' && html.includes('非法访问')) {
+    throw parseError('补考报名（教务返回非法访问）')
+  }
+  // 业务空态文案先于登录过期判据（短页无表会被误吞，T13 判例）
+  if (typeof html === 'string' && html.includes('不在报名时间范围')) {
+    return { makeups: [], note: '当前不在补考报名时间内（报名期开放后可查）' }
+  }
+  if (isJwLoginExpired(html)) {
+    const err = new Error('jw login expired')
+    err.isJwLoginExpired = true
+    throw err
+  }
+  // 报名期：按通用简表解析
+  try {
+    const table = parseSimpleTable(html)
+    if (table.headers.length === 0) {
+      return { makeups: [], note: '暂无补考记录' }
+    }
+    return { makeups: table.rows, headers: table.headers }
+  } catch {
+    return { makeups: [], note: '暂无补考记录' }
+  }
+}

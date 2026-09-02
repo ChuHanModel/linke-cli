@@ -1,6 +1,6 @@
 ---
 name: linke
-version: 1.0.0
+version: 1.1.0
 description: "林课教务查询 CLI（山东财经大学强智教务）：查课表、查成绩、看教务登录状态。当用户问「我这学期课表」「今天有什么课」「我的成绩/绩点」「挂了什么课」「教务登录状态」等教务只读信息时使用。登录全自动（验证码云端识别），无需用户介入。"
 metadata:
   requires:
@@ -83,10 +83,19 @@ linke status
   earned, inProgress, remaining }], courses: [...] }] }`。
 - 长尾命令：`{ label, page, headers: [中文表头…], rows: [[…]] }`——
   列含义以 headers 为准（教务列序变化时自洽），空数组=无记录。
-- 教务公告：`linke notices [--keyword 关键词] [--page N] [--size N]`
-  → `{ total, page, list: [{ title, url, date }] }`。**唯一不经教务
-  直连的命令**——走林课后端每日同步缓存（jwc.sdufe.edu.cn），
-  无需教务登录即可用。
+- 教务公告（双源现场获取）：`linke notices [--source jwc|jw|all]
+  [--keyword 关键词] [--page N]` → `{ total, list: [{ title, url,
+  date, source }] }`。jwc=教务处网站公开页（无需登录）；jw=教务
+  系统「已收公告」（需登录态）；条目带 source 标记。**数据面零
+  后端依赖**——所有查询数据均用户端现场拉取。
+- 补考：`linke makeups`（非报名期返回空态注记）。
+- 选课轮次：`linke rounds`（只读列表；选课操作是写域不提供）。
+- 班级目录/班级课表：`linke classes [--college 院系码] [--grade
+  年级]` → 专业+样例班级（dm 码）；`linke class-schedule --class
+  <班级dm>` → 该班课表网格。
+- 完成情况视图：`linke progress [--by plan|nature|attr]`——plan=
+  按修读方案（缺省）；nature=性质维度（已并入 plan 的 summary）；
+  attr=属性视图（服务端拦截不可达，返回 plan 数据+注记）。
 - 表单查询命令（同长尾输出形态）：`linke contests`（学科竞赛，
   `--name/--year`）、`calendar`（教学周历）、`xk-credits`（选课学分
   统计）、`xk-logs`（选退课日志，`--term/--round`）、`syllabus-query`

@@ -26,6 +26,8 @@ import {
   parseProgressPlansHtml,
   parseProgressDetailHtml,
   parseSimpleTable,
+  parseJwcNotices,
+  parseMakeupsHtml,
 } from './parsers.js'
 
 const USER_AGENT = 'Apifox/1.0.0 (https://apifox.com)'
@@ -367,6 +369,76 @@ export const sdufeAdapter = {
     return parseSimpleTable(res.text || '')
   },
 
+  /**
+   * jwc.sdufe.edu.cn 通知公告（公开源，无需登录；T17 双源之一）。
+   * 礼貌纪律：只抓请求的页（分页路径 tzgg/2.htm…），不预取整站。
+   */
+  async fetchJwcNotices(page = 1) {
+    const path = page <= 1 ? '/zxdt/tzgg.htm' : `/zxdt/tzgg/${page - 1}.htm`
+    let response
+    try {
+      response = await fetch('https://jwc.sdufe.edu.cn' + path, {
+        headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) linke-cli' },
+        redirect: 'follow',
+        signal: AbortSignal.timeout(15000),
+      })
+    } catch (err) {
+      throw networkError('抓取教务处公告页', err)
+    }
+    if (!response.ok) {
+      throw networkError(`抓取教务处公告页（HTTP ${response.status}）`, null)
+    }
+    return parseJwcNotices(await response.text())
+  },
+
+  /** 教务系统「已收公告」（个人收件，登录态；T17 双源之二） */
+  async fetchJwNotices(cookie, { pageIndex = 1 } = {}) {
+    return this.fetchSimplePage(cookie, '/jsxsd/ggly/ysgg_query', { pageIndex })
+  },
+
+  /** 补考报名（bkbm_query；非报名期返回语义空态） */
+  async fetchMakeups(cookie) {
+    const res = await this.request(`${this.baseUrl}/jsxsd/kscj/bkbm_query`, 'GET', { cookie })
+    return parseMakeupsHtml(res.text || '')
+  },
+
+  /** 选课轮次列表（xklc_list 只读：轮次/时间窗口；选课动作是写域不碰） */
+  async fetchXklcList(cookie) {
+    return this.fetchSimplePage(cookie, '/jsxsd/xsxk/xklc_list')
+  },
+
+  /**
+   * 班级三级联动目录（T17 破译，T14 终判翻案）：
+   * getZyByAjax?skyx=院系码&sknj=年级 → [{dm,dmmc}] 专业
+   * getBjByZyAndAjax?skzy=专业dm&sknj=年级 → [{dm,dmmc}] 班级（传 dm 不传名）
+   */
+  async fetchClasses(cookie, { collegeCode = '', grade = '' } = {}) {
+    const results = {}
+    const zyRes = await this.request(
+      `${this.baseUrl}/jsxsd/kbcx/getZyByAjax?skyx=${encodeURIComponent(collegeCode)}&sknj=${encodeURIComponent(grade)}`,
+      'GET',
+      { cookie }
+    )
+    results.majors = safeJson(zyRes.text)
+    if (results.majors && results.majors.length > 0) {
+      const first = results.majors[0]
+      const bjRes = await this.request(
+        `${this.baseUrl}/jsxsd/kbcx/getBjByZyAndAjax?skzy=${encodeURIComponent(first.dm)}&sknj=${encodeURIComponent(grade)}`,
+        'GET',
+        { cookie }
+      )
+      results.sampleClasses = safeJson(bjRes.text) // 首专业班级样例
+    }
+    return results
+  },
+
+  /** 班级课表（skbj=班级 dm 码；sknj 参数实测无效，班级码才是关键过滤） */
+  async fetchClassSchedule(cookie, { classCode, term = '' } = {}) {
+    const body = `xnxqh=${encodeURIComponent(term)}&sknj=&skyx=&skzy=&skbj=${encodeURIComponent(classCode)}`
+    const res = await this.request(`${this.baseUrl}/jsxsd/kbcx/kbxx_xzb_ifr`, 'POST', { body, cookie })
+    return parseSimpleTable(res.text || '')
+  },
+
   /** T14 教学周历（GET jxzl_query，xnxq01id 学期，空=教务默认） */
   async fetchCalendar(cookie, { term = '' } = {}) {
     const q = term ? `?xnxq01id=${encodeURIComponent(term)}` : ''
@@ -396,4 +468,13 @@ export const sdufeAdapter = {
     }
     return userInfo
   },
+}
+
+function safeJson(text) {
+  try {
+    const parsed = JSON.parse(String(text || ''))
+    return Array.isArray(parsed) ? parsed : []
+  } catch {
+    return []
+  }
 }

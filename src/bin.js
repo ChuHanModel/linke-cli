@@ -54,8 +54,13 @@ const USAGE = `linke —— 林课教务 CLI（只读查询，供 agent / 人类
   linke xk-logs [--term] [--round 轮次]                 选退课日志
   linke calendar [--term]                               教学周历
   linke textbooks / textbook-orders / thesis-guide      教材账目/选订教材/毕业过程指导（--page 翻页）
-  linke notices [--keyword 关键词] [--page N] [--size N]  教务公告（走林课后端每日同步缓存，
-                                                        唯一不经教务直连的命令）
+  linke notices [--source jwc|jw|all] [--keyword]    教务公告双源现场获取（jwc=教务处网站公开页，
+    [--page N]                                          jw=教务系统已收公告；缺省 all；数据面零后端依赖）
+  linke makeups                                        补考报名查询（非报名期返回空态注记）
+  linke rounds                                         选课轮次列表（只读）
+  linke classes [--college 院系码] [--grade 年级]       班级目录（专业→班级联动，T17 破译）
+  linke class-schedule --class <班级dm>                班级课表（班级 dm 从 linke classes 获取）
+  linke progress [--by plan|nature|attr]               学业完成情况（plan=按修读方案缺省）
   linke me                                             当前登录身份（学号/姓名/院系/班级/教学周）
   linke schools                                        列出可用学校适配器
   linke skill install [--path ~/.agents/skills]        安装 agent skill 说明书
@@ -402,13 +407,35 @@ async function cmdExams(flags) {
   return 0
 }
 
-async function cmdProgress() {
+async function cmdProgress(flags) {
   const config = requireConfig()
-  const progressResult = await withSession(config, (adapter, session) =>
-    adapter.fetchProgress(session.cookie)
-  )
-  emitJson(progressResult)
-  return 0
+  const by = str(flags.by) || 'plan'
+  if (by === 'plan') {
+    const progressResult = await withSession(config, (adapter, session) =>
+      adapter.fetchProgress(session.cookie)
+    )
+    emitJson(progressResult)
+    return 0
+  }
+  if (by === 'nature' || by === 'attr') {
+    // 性质视图数据已含于 plan 输出（summary 即课程性质维度）；
+    // 属性/体系视图（idxOnlb/idxOntx）服务端校验拦截（正确菜单 URL
+    // + GET/空 POST 双拒，证据 T11/T17 devlog 在案）——空态+注记
+    const progressResult = await withSession(config, (adapter, session) =>
+      adapter.fetchProgress(session.cookie)
+    )
+    emitJson({
+      by,
+      note:
+        by === 'nature'
+          ? '性质维度已并入 plan 输出（各方案 summary 的 nature 字段即课程性质汇总）'
+          : '属性视图（idxOnlb）服务端校验拦截不可达，返回 plan 数据供参考（证据见 devlog）',
+      ...progressResult,
+    })
+    return 0
+  }
+  progress(`未知 --by: ${by}（支持 plan|nature|attr）`)
+  return 1
 }
 
 /**
@@ -508,23 +535,128 @@ const FORM_PAGES = {
 }
 
 async function cmdNotices(flags) {
-  // 教务公告走林课后端 JwNotice API（公共数据每日同步缓存）——
-  // 不经教务直连，无需教务 session（T3 架构决策）
-  const { callAppApi } = await import('./appapi.js')
-  const { resolveConfig } = await import('./config.js')
-  const config = resolveConfig()
+  // T17 双源现场获取（用户拍板：数据面零后端依赖——不经林课后端，
+  // jwc=公开网站现场抓取，jw=教务已收公告直连）
+  const source = str(flags.source) || 'all'
+  if (!['jwc', 'jw', 'all'].includes(source)) {
+    progress(`未知 --source: ${source}（支持 jwc|jw|all），按 all 查询`)
+  }
+  const effectiveSource = ['jwc', 'jw', 'all'].includes(source) ? source : 'all'
   const keyword = str(flags.keyword)
-  const page = str(flags.page) || '1'
-  const pageSize = str(flags.size) || '20'
-  const service = keyword ? 'App.JwNotice.GetListFromDbByKeyword' : 'App.JwNotice.GetListFromDb'
-  const params = keyword ? { keyword, page, pageSize } : { page, pageSize }
-  const data = await callAppApi(service, params, config ? config.apiBase : undefined)
+  const page = Math.max(1, Number(str(flags.page)) || 1)
+  const MAX_SCAN_PAGES = 5 // 礼貌纪律：本地过滤扫描上限
+
+  const config = resolveConfig()
+  const results = []
+  const errors = []
+
+  if (effectiveSource !== 'jw') {
+    try {
+      const { sdufeAdapter } = await import('./schools/sdufe/adapter.js')
+      const scanPages = keyword ? Math.min(MAX_SCAN_PAGES, 5) : page
+      let items = []
+      const startPage = keyword ? 1 : page
+      for (let p = startPage; p < startPage + (keyword ? scanPages : 1); p++) {
+        const list = await sdufeAdapter.fetchJwcNotices(p)
+        items = items.concat(list.map((x) => ({ ...x, source: 'jwc' })))
+        if (!keyword && p === page) break
+        if (list.length === 0) break
+      }
+      results.push(...items)
+    } catch (err) {
+      errors.push(`jwc: ${err.message}`)
+    }
+  }
+
+  if (effectiveSource !== 'jwc') {
+    if (!config) {
+      errors.push('jw: 未配置教务凭据（已收公告需登录态），运行 linke login 后可查')
+    } else {
+      try {
+        const table = await withSession(config, (adapter, session) =>
+          adapter.fetchJwNotices(session.cookie, { pageIndex: page })
+        )
+        const headers = table.headers || []
+        const titleIdx = headers.findIndex((h) => h.includes('标题'))
+        const dateIdx = headers.findIndex((h) => h.includes('时间'))
+        results.push(
+          ...(table.rows || []).map((r) => ({
+            title: titleIdx >= 0 ? r[titleIdx] : r[1] || '',
+            url: '',
+            date: dateIdx >= 0 ? r[dateIdx] : '',
+            source: 'jw',
+          }))
+        )
+      } catch (err) {
+        errors.push(`jw: ${err.message}`)
+      }
+    }
+  }
+
+  let list = results
+  if (keyword) list = list.filter((x) => (x.title || '').includes(keyword))
+
   emitJson({
-    source: '林课后端每日同步缓存（jwc.sdufe.edu.cn）',
-    total: data.total ?? null,
-    page: Number(page),
-    list: data.list || [],
+    source: effectiveSource,
+    page,
+    total: list.length,
+    list: list.slice(0, 50),
+    ...(errors.length ? { errors } : {}),
   })
+  return 0
+}
+
+async function cmdMakeups() {
+  const config = requireConfig()
+  const result = await withSession(config, (adapter, session) =>
+    adapter.fetchMakeups(session.cookie)
+  )
+  emitJson(result)
+  return 0
+}
+
+async function cmdRounds() {
+  const config = requireConfig()
+  const result = await withSession(config, (adapter, session) =>
+    adapter.fetchXklcList(session.cookie)
+  )
+  emitJson({ label: '选课轮次（只读；选课操作是写域不提供）', ...result })
+  return 0
+}
+
+async function cmdClasses(flags) {
+  const config = requireConfig()
+  const college = str(flags.college)
+  const grade = str(flags.grade)
+  const result = await withSession(config, (adapter, session) =>
+    adapter.fetchClasses(session.cookie, { collegeCode: college, grade })
+  )
+  emitJson({
+    label: '班级目录（专业→班级联动；班级 dm 用于 class-schedule --class）',
+    college: college || null,
+    grade: grade || null,
+    ...result,
+  })
+  return 0
+}
+
+async function cmdClassSchedule(flags) {
+  const config = requireConfig()
+  const classCode = str(flags.class)
+  if (!classCode) {
+    progress('需要 --class <班级dm码>（用 linke classes 查目录；如 --class 3124A255C2…）')
+    return 1
+  }
+  const result = await withSession(config, async (adapter, session) => {
+    let term = str(flags.term)
+    if (!term) {
+      term = (await adapter.fetchCurrentTerm(session.cookie)) || ''
+      if (term) progress(`当前学期: ${term}`)
+    }
+    const table = await adapter.fetchClassSchedule(session.cookie, { classCode, term })
+    return { label: '班级课表', term: term || null, classCode, ...table }
+  })
+  emitJson(result)
   return 0
 }
 
@@ -666,7 +798,7 @@ async function dispatch(argv) {
     case 'exams':
       return cmdExams(flags)
     case 'progress':
-      return cmdProgress()
+      return cmdProgress(flags)
     case 'levels':
     case 'innovation':
     case 'changes':
@@ -693,6 +825,14 @@ async function dispatch(argv) {
       return cmdSimplePage(command, flags)
     case 'notices':
       return cmdNotices(flags)
+    case 'makeups':
+      return cmdMakeups()
+    case 'rounds':
+      return cmdRounds()
+    case 'classes':
+      return cmdClasses(flags)
+    case 'class-schedule':
+      return cmdClassSchedule(flags)
     case 'me':
       return cmdMe()
     case 'schools':
