@@ -127,8 +127,8 @@ function parseTableByHeader(tableHtml) {
   return { headers, rows }
 }
 
-/** 在整页里按表头特征找表（返回 { headers, rows } 或 null） */
-function findTableByHeaders(html, mustInclude) {
+/** 在整页里按表头特征找表（返回 { headers, rows } 或 null）；导出供测试 */
+export function findTableByHeaders(html, mustInclude) {
   for (const m of html.matchAll(/<table\b[\s\S]*?<\/table>/gi)) {
     const parsed = parseTableByHeader(m[0])
     if (parsed.headers.length === 0) continue
@@ -490,4 +490,228 @@ export function parsePlanHtml(html) {
     courses.push(item)
   }
   return { total: courses.length, courses }
+}
+
+/**
+ * 培养方案明细（/jsxsd/pyfa/topyfamx，GET 直出 75KB）。
+ *
+ * 页面怪癖（真实页实锤）：TH 开标签用 </TD> 闭合（畸形标记），
+ * 配对正则全部失效——专用流式 tokenizer（按 <tr/<td 开标签切分，
+ * 不依赖闭合配对）；课程表两层表头（「学时分类」分组头+6 子头）；
+ * 体系列 rowspan 合并（首行 13 格、续行 12 格）；总学时列含
+ * 「17 -->」尾缀；小计/合计行混在数据流中。
+ *
+ * → { objectives, courses: [{ system, group, courseCode, courseName,
+ *     category, credit, hours: { lecture, practice, seminar, lab,
+ *     computer, total }, term }] }
+ */
+export function parsePyfaHtml(html) {
+  if (isJwLoginExpired(html)) {
+    const err = new Error('jw login expired')
+    err.isJwLoginExpired = true
+    throw err
+  }
+  const clean = (s) =>
+    String(s ?? '')
+      .replace(/<[^>]+>/g, '')
+      .replace(/&nbsp;/gi, ' ')
+      .replace(/&amp;/g, '&')
+      .replace(/[\u00a0\u3000]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+
+  // 培养目标段（「一、培养目标」到「二、」之前）
+  const plain = clean(html)
+  let objectives = ''
+  const objMatch = plain.match(/一、培养目标([\s\S]*?)(?=二、|$)/)
+  if (objMatch) objectives = objMatch[1].trim().slice(0, 2000)
+
+  // 流式切行
+  const rows = []
+  const rowRe = /<tr\b[^>]*>([\s\S]*?)(?=<tr\b|<\/table)/gi
+  let m
+  while ((m = rowRe.exec(html))) rows.push(m[1])
+  // 找表头行（体系+课号 同行）
+  const headerIdx = rows.findIndex(
+    (r) => /体系/.test(clean(r)) && /课号/.test(clean(r))
+  )
+  if (headerIdx === -1) {
+    throw parseError('培养方案明细（未找到课程设置总表表头）')
+  }
+  const cellsOf = (rowHtml) => {
+    const cells = []
+    const cellRe = /<t[hd]\b[^>]*>([\s\S]*?)(?=<t[hd]\b|<tr\b|<\/table|$)/gi
+    let c
+    while ((c = cellRe.exec(rowHtml))) {
+      const text = clean(c[1])
+      cells.push(text)
+    }
+    return cells
+  }
+
+  const courses = []
+  let lastSystem = ''
+  for (let i = headerIdx + 1; i < rows.length; i++) {
+    const cells = cellsOf(rows[i])
+    if (cells.length === 0) continue
+    // 两层表头的子头行（讲课/实践/讲座…）与汇总行跳过
+    const joined = cells.join(' ')
+    if (/^(讲课学时|实践学时)/.test(cells[0]) || cells[0] === '') {
+      if (cells[0] === '' && cells.length < 10) continue
+    }
+    if (/^(小计|合计)/.test(cells[0])) continue
+    // 数据行：12 格（体系沿用上一行）或 13 格（首列=体系）
+    if (cells.length === 13) {
+      lastSystem = cells[0] || lastSystem
+      cells.shift() // 统一成 12 格处理
+    } else if (cells.length !== 12) {
+      continue
+    }
+    const [group, courseCode, courseName, category, credit, lecture, practice, seminar, lab, computer, totalRaw, term] = cells
+    if (!/^\d{6,8}$/.test(courseCode)) continue // 非课程行（说明文字等）
+    courses.push({
+      system: lastSystem,
+      group,
+      courseCode,
+      courseName,
+      category,
+      credit,
+      hours: {
+        lecture,
+        practice,
+        seminar,
+        lab,
+        computer,
+        total: totalRaw.replace(/-->\s*$/, '').trim(),
+      },
+      term,
+    })
+  }
+  if (courses.length === 0) {
+    throw parseError('培养方案明细（课程总表零行）')
+  }
+  return { objectives, courses }
+}
+
+/**
+ * 考试安排（POST /jsxsd/xsks/xsksap_list——真实端点由表单页 JS
+ * queryKsap() 改写 action 而来，直 POST xsksap_query 只回表单页）。
+ * 参数：xnxqid 学期 / xqlb 类别码(1 期初 2 期中 3 期末，空=全部) /
+ * xqlbmc 类别名文本（JS 会在提交前填入选中项文本，重放须带上）。
+ * 真实结构 9 列：序号/考试场次/课程编号/课程名称/考试时间/考场/
+ * 座位号/准考证号/操作。考试未发布时整页仅「未查询到数据」。
+ * → { exams: [{ session, courseCode, courseName, time, location,
+ *     seat, admissionTicket }] }（无数据返回空数组，不抛错）
+ */
+export function parseExamsHtml(html) {
+  if (isJwLoginExpired(html)) {
+    const err = new Error('jw login expired')
+    err.isJwLoginExpired = true
+    throw err
+  }
+  if (html.includes('未查询到数据')) {
+    return { exams: [] }
+  }
+  const table = findTableByHeaders(html, ['课程名称', '考试时间', '考场'])
+  if (!table) {
+    throw parseError('考试安排（未找到数据表且非空结果页）')
+  }
+  const col = (h) => table.headers.findIndex((x) => x.includes(h))
+  const idx = {
+    session: col('考试场次'),
+    courseCode: col('课程编号'),
+    courseName: col('课程名称'),
+    time: col('考试时间'),
+    location: col('考场'),
+    seat: col('座位号'),
+    admissionTicket: col('准考证号'),
+  }
+  const exams = []
+  for (const row of table.rows) {
+    const item = {}
+    for (const [key, i] of Object.entries(idx)) {
+      item[key] = i >= 0 ? row[i] ?? '' : ''
+    }
+    if (!item.courseName && !item.courseCode) continue
+    exams.push(item)
+  }
+  return { exams }
+}
+
+/**
+ * 完成情况方案入口页（GET /jsxsd/xxwcqk/xxwcqk_idxOnxz.do——真实
+ * 菜单 URL 带 xxwcqk_ 前缀；全菜单树文档的 xstxkxdqk_ 前缀为误记）。
+ * 页面形态：每个修读方案一个独立 form，POST /jsxsd/xxwcqk/xxwcqkOnkcxz.do，
+ * 主修带隐藏码 ndzydm（专业代码）、辅修带 fxzydm（辅修专业代码），
+ * 另有恒空 jx0301zxjhid；「查看完成情况」按钮即提交该 form。
+ * → { plans: [{ type: '主修'|'辅修', name, code, codeField }] }
+ */
+export function parseProgressPlansHtml(html) {
+  // 非法访问错误页（725B 无 table）会被登录过期判据误吞，先判
+  if (typeof html === 'string' && html.includes('非法访问')) {
+    throw parseError('完成情况方案入口（教务返回非法访问）')
+  }
+  if (isJwLoginExpired(html)) {
+    const err = new Error('jw login expired')
+    err.isJwLoginExpired = true
+    throw err
+  }
+  const plans = []
+  for (const m of html.matchAll(/<form\b[^>]*xxwcqkOnkcxz\.do[^>]*>([\s\S]*?)<\/form>/gi)) {
+    const form = m[1]
+    const codeField = /name="ndzydm"/i.test(form) ? 'ndzydm' : /name="fxzydm"/i.test(form) ? 'fxzydm' : ''
+    if (!codeField) continue
+    const code = (form.match(new RegExp(`name="${codeField}"[^>]*value="([^"]*)"`, 'i')) || [])[1] || ''
+    const visible = cleanCell(form)
+    // 方案名：form 可见文本去掉「修读方案：」与按钮文字
+    const name = visible.replace(/修读方案[：:]?/, '').replace(/查看完成情况.*/, '').trim()
+    if (!code) continue
+    plans.push({ type: codeField === 'ndzydm' ? '主修' : '辅修', name, code, codeField })
+  }
+  if (plans.length === 0) {
+    throw parseError('完成情况方案入口（未找到修读方案表单）')
+  }
+  return { plans }
+}
+
+/**
+ * 完成情况数据页（POST xxwcqkOnkcxz.do 返回）。双表：
+ *   汇总表 th=课程性质/要求学分/已修学分/正修读学分/还需学分
+ *   明细表 th=课程编号/课程名称/学分/课程类别/课程性质/修读情况
+ * → { summary: [{ nature, required, earned, inProgress, remaining }],
+ *     courses: [{ courseCode, courseName, credit, category, nature, status }] }
+ */
+export function parseProgressDetailHtml(html) {
+  if (isJwLoginExpired(html)) {
+    const err = new Error('jw login expired')
+    err.isJwLoginExpired = true
+    throw err
+  }
+  const summaryTable = findTableByHeaders(html, ['课程性质', '要求学分', '还需学分'])
+  const courseTable = findTableByHeaders(html, ['课程编号', '修读情况'])
+  if (!summaryTable && !courseTable) {
+    throw parseError('完成情况数据页（未找到汇总/明细表）')
+  }
+  const summary = []
+  if (summaryTable) {
+    for (const row of summaryTable.rows) {
+      if (!row[0]) continue
+      summary.push({ nature: row[0], required: row[1] ?? '', earned: row[2] ?? '', inProgress: row[3] ?? '', remaining: row[4] ?? '' })
+    }
+  }
+  const courses = []
+  if (courseTable) {
+    for (const row of courseTable.rows) {
+      if (!/^\d{5,8}$/.test(row[0] ?? '')) continue // 跳过分组标题行（如「必修」）
+      courses.push({
+        courseCode: row[0],
+        courseName: row[1] ?? '',
+        credit: row[2] ?? '',
+        category: row[3] ?? '',
+        nature: row[4] ?? '',
+        status: row[5] ?? '',
+      })
+    }
+  }
+  return { summary, courses }
 }

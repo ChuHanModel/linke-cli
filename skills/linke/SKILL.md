@@ -1,6 +1,6 @@
 ---
 name: linke
-version: 0.6.0
+version: 0.7.0
 description: "林课教务查询 CLI（山东财经大学强智教务）：查课表、查成绩、看教务登录状态。当用户问「我这学期课表」「今天有什么课」「我的成绩/绩点」「挂了什么课」「教务登录状态」等教务只读信息时使用。登录全自动（验证码云端识别），无需用户介入。"
 metadata:
   requires:
@@ -44,6 +44,9 @@ linke status
 | 平均学分绩点（含辅修） | `linke gpa` |
 | 学籍卡片（核心字段） | `linke xj`（`--full` 附非敏感扩展字段；身份证/联系方式等强敏感信息任何模式都不输出） |
 | 培养执行计划 | `linke plan` |
+| 培养方案明细（体系/学时） | `linke pyfa` |
+| 考试安排 | `linke exams --term 2025-2026-2 --kind 期末`（kind 支持 期初|期中|期末，缺省全部；考试未发布时 exams 为空数组） |
+| 学业完成情况 | `linke progress`（各修读方案的性质汇总+课程修读明细） |
 | 当前登录身份 | `linke me` |
 | 登录/配置状态 | `linke status` |
 
@@ -71,6 +74,12 @@ linke status
   grade, extra? }`——`extra` 仅 `--full` 时出现。
 - 执行计划：`{ total, courses: [{ term, courseCode, courseName,
   department, credit, hours, examMethod, nature, isExam, syllabus }] }`。
+- 培养方案：`{ objectives, courses: [{ system, group, courseCode,
+  courseName, category, credit, hours: {...}, term }] }`。
+- 考试：`{ term, kind, exams: [{ session, courseCode, courseName, time,
+  location, seat, admissionTicket }] }`。
+- 完成情况：`{ plans: [{ type, name, summary: [{ nature, required,
+  earned, inProgress, remaining }], courses: [...] }] }`。
 - 身份：`{ userId, name, unit, discipline, class, week: { now, all } }`。
 
 ## 报错自救（exit code）

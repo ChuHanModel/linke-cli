@@ -21,6 +21,10 @@ import {
   parseGpaHtml,
   parseXjHtml,
   parsePlanHtml,
+  parsePyfaHtml,
+  parseExamsHtml,
+  parseProgressPlansHtml,
+  parseProgressDetailHtml,
 } from './parsers.js'
 
 const USER_AGENT = 'Apifox/1.0.0 (https://apifox.com)'
@@ -35,6 +39,9 @@ export const COURSE_TYPE_MAP = {
   实践必修: '5',
   其它: '9',
 }
+
+/** 考试类别中文名 → xqlb 码；xqlbmc 须为选中项文本（表单页 JS 口径） */
+const EXAM_KIND_MAP = { 期初: '1', 期中: '2', 期末: '3' }
 
 export const sdufeAdapter = {
   id: 'sdufe',
@@ -261,6 +268,46 @@ export const sdufeAdapter = {
   async fetchPlan(cookie) {
     const res = await this.request(`${this.baseUrl}/jsxsd/pyfa/pyfa_query`, 'GET', { cookie })
     return parsePlanHtml(res.text || '')
+  },
+
+  /** 培养方案明细（GET 直出 75KB，畸形标记专用流式解析） */
+  async fetchPyfa(cookie) {
+    const res = await this.request(`${this.baseUrl}/jsxsd/pyfa/topyfamx`, 'GET', { cookie })
+    return parsePyfaHtml(res.text || '')
+  },
+
+  /**
+   * 考试安排（T11 口径攻坚成果）：真实数据端点是 xsksap_list——
+   * 表单页 JS queryKsap() 会把 action 从空改写为此并填 xqlbmc 文本，
+   * 直 POST xsksap_query 只回表单页。
+   * @param {object} q { term 学期, kind 期初|期中|期末（空=全部） }
+   */
+  async fetchExams(cookie, { term = '', kind = '' } = {}) {
+    const xqlb = EXAM_KIND_MAP[kind] || String(kind || '')
+    const body =
+      `xnxqid=${encodeURIComponent(term)}&xqlb=${encodeURIComponent(xqlb)}` +
+      `&xqlbmc=${encodeURIComponent(kind || '')}`
+    const res = await this.request(`${this.baseUrl}/jsxsd/xsks/xsksap_list`, 'POST', { body, cookie })
+    return parseExamsHtml(res.text || '')
+  },
+
+  /**
+   * 学业完成情况（T11 口径攻坚成果）：两步——GET 入口页取修读方案
+   * （每方案一个 form，主修带 ndzydm/辅修带 fxzydm 隐藏码），再逐个
+   * POST xxwcqkOnkcxz.do 取双表数据。入口真实 URL 带 xxwcqk_ 前缀
+   * （全菜单树文档的 xstxkxdqk_ 前缀为误记）。
+   */
+  async fetchProgress(cookie) {
+    const entry = await this.request(`${this.baseUrl}/jsxsd/xxwcqk/xxwcqk_idxOnxz.do`, 'GET', { cookie })
+    const { plans } = parseProgressPlansHtml(entry.text || '')
+    const results = []
+    for (const plan of plans) {
+      const body = `${plan.codeField}=${encodeURIComponent(plan.code)}&jx0301zxjhid=`
+      const res = await this.request(`${this.baseUrl}/jsxsd/xxwcqk/xxwcqkOnkcxz.do`, 'POST', { body, cookie })
+      const detail = parseProgressDetailHtml(res.text || '')
+      results.push({ type: plan.type, name: plan.name, ...detail })
+    }
+    return { plans: results }
   },
 
   /** session 探活：返回当前登录用户信息；过期抛 isJwLoginExpired 错误 */

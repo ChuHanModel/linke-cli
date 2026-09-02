@@ -37,6 +37,9 @@ const USAGE = `linke —— 林课教务 CLI（只读查询，供 agent / 人类
   linke xj [--full]                                    学籍卡片（默认核心字段；--full 附
                                                        非敏感扩展字段）
   linke plan                                           培养执行计划（逐学期课程列表）
+  linke pyfa                                           培养方案明细（体系/学时/开课学期）
+  linke exams [--term 2025-2026-2] [--kind 期末]       考试安排（期初|期中|期末，缺省全部）
+  linke progress                                       学业完成情况（各修读方案进度）
   linke me                                             当前登录身份（学号/姓名/院系/班级/教学周）
   linke schools                                        列出可用学校适配器
   linke skill install [--path ~/.agents/skills]        安装 agent skill 说明书
@@ -357,6 +360,41 @@ async function cmdPlan() {
   return 0
 }
 
+async function cmdPyfa() {
+  const config = requireConfig()
+  const pyfa = await withSession(config, (adapter, session) => adapter.fetchPyfa(session.cookie))
+  emitJson(pyfa)
+  return 0
+}
+
+async function cmdExams(flags) {
+  const config = requireConfig()
+  let term = flags.term ? String(flags.term) : ''
+  const kind = flags.kind && flags.kind !== true ? String(flags.kind) : ''
+  if (kind && !['期初', '期中', '期末'].includes(kind)) {
+    progress(`未知考试类别: ${kind}（支持 期初|期中|期末），按全部类别查询`)
+  }
+  const result = await withSession(config, async (adapter, session) => {
+    if (!term) {
+      term = (await adapter.fetchCurrentTerm(session.cookie)) || ''
+      if (term) progress(`当前学期: ${term}`)
+    }
+    const exams = await adapter.fetchExams(session.cookie, { term, kind })
+    return { term: term || null, kind: kind || null, ...exams }
+  })
+  emitJson(result)
+  return 0
+}
+
+async function cmdProgress() {
+  const config = requireConfig()
+  const progressResult = await withSession(config, (adapter, session) =>
+    adapter.fetchProgress(session.cookie)
+  )
+  emitJson(progressResult)
+  return 0
+}
+
 async function cmdSchools() {
   emitJson(listAdapters())
   return 0
@@ -425,6 +463,12 @@ async function dispatch(argv) {
       return cmdXj(flags)
     case 'plan':
       return cmdPlan()
+    case 'pyfa':
+      return cmdPyfa()
+    case 'exams':
+      return cmdExams(flags)
+    case 'progress':
+      return cmdProgress()
     case 'me':
       return cmdMe()
     case 'schools':
