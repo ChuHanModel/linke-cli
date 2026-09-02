@@ -76,6 +76,17 @@ const USAGE = `linke —— 林课教务 CLI（只读查询，供 agent / 人类
   linke course-search <关键词>                          林课课程库检索（22k 用户共建数据）
   linke course-stats <课程名或编号>                      课程给分统计（人数/均分/箱线图五数/挂科率）
   linke rankings [--by star|score] [--limit 20]         林课榜单（评分榜/给分榜）
+  linke comment-post <课程> --stars 5,4,3 --text ...    发布评课（两段式：先预览，
+                                                        --confirm 才发布，全校可见）
+  linke comment-update <课程> --stars ... --text ...    修改自己的评课（--confirm）
+  linke comment-delete <课程>                           删除自己的评课（--confirm）
+  linke collect / uncollect <课程>                      收藏 / 取消收藏（--confirm）
+  linke like <评论ID>                                   给评论点赞（--confirm）
+  linke nickname <新昵称>                               修改林课昵称（--confirm）
+  linke my-comments [--course 课程名]                   我发布的评课
+  linke pending-reviews [--term]                        待评价课程（已修未评）
+  linke collections                                     我的收藏课程
+  linke profile                                         我的林课档案
   linke comments <课程名> [--page N]                    课程评论与综合评分（只读）
   linke schools                                        列出可用学校适配器
   linke skill install [--path ~/.agents/skills]        安装 agent skill 说明书
@@ -710,6 +721,85 @@ async function maybeSyncScores(config, creditsResult) {
   }
 }
 
+/** 课程名→courseId（复用课程库检索；多命中取第一并提示） */
+async function resolveCourseId(config, query) {
+  const { callLinkeApi } = await import('./linkeapi.js')
+  const searched = await callLinkeApi(config, 'App.Course.GetCourseByNameLike', { nameLike: query })
+  const list = Array.isArray(searched) ? searched : searched.list || []
+  if (!list.length) throw new Error(`课程库未命中「${query}」`)
+  return { courseId: list[0].courseId, name: list[0].lessonName || list[0].courseName || query, others: list.length - 1 }
+}
+
+/**
+ * T21 写命令统一处理：两段式确认 + 审计。
+ * @param {string} op 命令名（入 ops.log）
+ * @param {object} build (config) => { service, params, previewText, target, consequence }
+ */
+async function cmdWriteOp(op, flags, build) {
+  const config = requireConfig()
+  const { runWriteOp } = await import('./writeops.js')
+  const { callLinkeApi } = await import('./linkeapi.js')
+  const view = await build(config)
+  const outcome = await runWriteOp(
+    op,
+    view,
+    flags.confirm === true,
+    (service, params) => callLinkeApi(config, service, params),
+    progress
+  )
+  if (outcome === 1) return 1
+  emitJson({ ok: true, op, target: view.target, result: outcome.result })
+  return 0
+}
+
+function parseStars(raw) {
+  const parts = String(raw || '').split(/[,,]/).map((x) => Number(x.trim()))
+  if (parts.length !== 3 || parts.some((n) => !Number.isInteger(n) || n < 1 || n > 5)) {
+    throw new Error('--stars 需为三个 1-5 整数（如 5,4,3，对应三星维度）')
+  }
+  return parts
+}
+
+async function cmdMyComments(flags) {
+  const config = requireConfig()
+  const { callLinkeApi } = await import('./linkeapi.js')
+  const course = str(flags.course)
+  if (course) {
+    const target = await resolveCourseId(config, course)
+    const data = await callLinkeApi(config, 'App.CourseComment.GetMyComment', { courseId: target.courseId })
+    emitJson({ course: target.name, myComment: data })
+    return 0
+  }
+  emitJson({ note: '按课程查询请加 --course <课程名>（「我评过的全部课」后端未提供全量接口，App 端「我的」页同源口径）' })
+  return 0
+}
+
+async function cmdCollections() {
+  const config = requireConfig()
+  const { callLinkeApi } = await import('./linkeapi.js')
+  const data = await callLinkeApi(config, 'App.UserCollection.GetCollection', {})
+  emitJson(data)
+  return 0
+}
+
+async function cmdProfile() {
+  const config = requireConfig()
+  const { callLinkeApi } = await import('./linkeapi.js')
+  const data = await callLinkeApi(config, 'App.User.GetUserInfo', { userId: config.userId })
+  emitJson(data)
+  return 0
+}
+
+async function cmdPendingReviews(flags) {
+  const config = requireConfig()
+  const { callLinkeApi } = await import('./linkeapi.js')
+  const data = await callLinkeApi(config, 'App.UserCourse.GetCourseByUserId', {
+    courseTerm: str(flags.term),
+  })
+  emitJson({ note: '已修读课程列表（待评价口径与 App 端评价页同源；按 courseTerm 过滤）', courses: data })
+  return 0
+}
+
 async function cmdNotices(flags) {
   // T17 双源现场获取（用户拍板：数据面零后端依赖——不经林课后端，
   // jwc=公开网站现场抓取，jw=教务已收公告直连）
@@ -1044,6 +1134,104 @@ async function dispatch(argv) {
     case 'comments':
       if (!positional[1]) { progress('用法: linke comments <课程名>'); return 1 }
       return cmdComments(positional.slice(1).join(' '), flags)
+    case 'comment-post': {
+      if (positional.length < 2) { progress('用法: linke comment-post <课程名> --stars 5,4,3 --text "评语"'); return 1 }
+      const q = positional[1]
+      return cmdWriteOp('comment-post', flags, async (config) => {
+        const stars = parseStars(flags.stars)
+        const text = str(flags.text)
+        if (!text) throw new Error('缺少 --text "评语内容"')
+        const target = await resolveCourseId(config, q)
+        return {
+          service: 'App.CourseComment.PostComment',
+          params: { courseId: target.courseId, commentStar1: stars[0], commentStar2: stars[1], commentStar3: stars[2], commentMessage: text },
+          previewText: [
+            `课程：${target.name}${target.others ? `（另有 ${target.others} 个同名候选，按第一个执行）` : ''}`,
+            `星级：${stars.join(' / ')}（三星维度）`,
+            `评语：${text}`,
+          ],
+          consequence: '评课将公开发布，全校可见，并计入课程评分统计',
+          target: `course=${target.courseId} stars=${stars.join(',')} text=${text.slice(0, 30)}`,
+        }
+      })
+    }
+    case 'comment-update': {
+      if (positional.length < 2) { progress('用法: linke comment-update <课程名> --stars 5,4,3 --text "新评语"'); return 1 }
+      const q = positional[1]
+      return cmdWriteOp('comment-update', flags, async (config) => {
+        const stars = parseStars(flags.stars)
+        const text = str(flags.text)
+        if (!text) throw new Error('缺少 --text "新评语"')
+        const target = await resolveCourseId(config, q)
+        return {
+          service: 'App.CourseComment.UpdateComment',
+          params: { courseId: target.courseId, commentStar1: stars[0], commentStar2: stars[1], commentStar3: stars[2], commentMessage: text },
+          previewText: [`课程：${target.name}`, `新星级：${stars.join(' / ')}`, `新评语：${text}`],
+          consequence: '将覆盖你在该课程的既有评课（公开发布，全校可见）',
+          target: `course=${target.courseId} stars=${stars.join(',')} text=${text.slice(0, 30)}`,
+        }
+      })
+    }
+    case 'comment-delete': {
+      if (positional.length < 2) { progress('用法: linke comment-delete <课程名>'); return 1 }
+      const q = positional[1]
+      return cmdWriteOp('comment-delete', flags, async (config) => {
+        const target = await resolveCourseId(config, q)
+        return {
+          service: 'App.CourseComment.DeleteComment',
+          params: { courseId: target.courseId },
+          previewText: [`课程：${target.name}`, '操作：删除你在这门课的评课内容'],
+          consequence: '删除后不可恢复（课程评分统计将随之更新）',
+          target: `course=${target.courseId}`,
+        }
+      })
+    }
+    case 'collect':
+    case 'uncollect': {
+      if (positional.length < 2) { progress(`用法: linke ${command} <课程名>`); return 1 }
+      const q = positional[1]
+      const isCollect = command === 'collect'
+      return cmdWriteOp(command, flags, async (config) => {
+        const target = await resolveCourseId(config, q)
+        return {
+          service: isCollect ? 'App.UserCollection.PostCollection' : 'App.UserCollection.DeleteCollection',
+          params: { courseId: target.courseId },
+          previewText: [`课程：${target.name}`, `操作：${isCollect ? '加入收藏' : '取消收藏'}`],
+          consequence: isCollect ? '该课程将出现在你的收藏列表' : '将从你的收藏列表移除',
+          target: `course=${target.courseId}`,
+        }
+      })
+    }
+    case 'like': {
+      const id = positional[1]
+      if (!id) { progress('用法: linke like <评论ID>'); return 1 }
+      return cmdWriteOp('like', flags, async () => ({
+        service: 'App.CourseComment.LikeComment',
+        params: { commentId: id },
+        previewText: [`评论 ID：${id}`, '操作：点赞'],
+        consequence: '该评论点赞数 +1',
+        target: `comment=${id}`,
+      }))
+    }
+    case 'nickname': {
+      const name = positional.slice(1).join(' ')
+      if (!name) { progress('用法: linke nickname <新昵称>'); return 1 }
+      return cmdWriteOp('nickname', flags, async () => ({
+        service: 'App.User.PostUserInfoNickname',
+        params: { userNickname: name },
+        previewText: [`新昵称：${name}`],
+        consequence: '将更新你在林课的公开昵称（评论列表展示）',
+        target: `nickname=${name}`,
+      }))
+    }
+    case 'my-comments':
+      return cmdMyComments(flags)
+    case 'collections':
+      return cmdCollections()
+    case 'profile':
+      return cmdProfile()
+    case 'pending-reviews':
+      return cmdPendingReviews(flags)
     case 'schools':
       return cmdSchools()
     case 'skill':

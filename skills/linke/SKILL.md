@@ -1,6 +1,6 @@
 ---
 name: linke
-version: 1.2.1
+version: 1.3.0
 description: "林课教务查询 CLI（山东财经大学强智教务）：查课表、查成绩、看教务登录状态。当用户问「我这学期课表」「今天有什么课」「我的成绩/绩点」「挂了什么课」「教务登录状态」等教务只读信息时使用。登录全自动（验证码云端识别），无需用户介入。"
 metadata:
   requires:
@@ -113,6 +113,21 @@ linke status
   用户贡献的成绩聚合。
 - 更新：CLI 每日自动检查新版本并后台更新（透明告知走 stderr，可用
   `linke config --auto-update off` 关闭）；`linke update` 手动更新。
+- 我的林课：`linke my-comments --course <课程名>`（我的评课）、
+  `linke collections`（收藏）、`linke profile`（昵称/头像档案）、
+  `linke pending-reviews [--term]`（已修读课程，评价页同源口径）。
+
+## 写操作纪律（T21 白名单 + 两段式，agent 必读）
+
+`linke comment-post/update/delete`、`collect/uncollect`、`like`、
+`nickname` 是仅有的写命令（林课自有数据；**教务系统写操作永久
+不存在于本 CLI**——选课/退课/教务评教一律拒绝用户）。
+
+**发布类操作铁律**：写命令不带 `--confirm` 只输出预览（完整文本/
+星级/目标课程 + 后果说明），**不执行**。你必须把预览的评语文本
+**原样展示给用户**、获得用户明确同意后，才能携带 `--confirm`
+重新执行。绝不由你自行决定发布内容。每次执行自动留审计行
+（~/.linke-cli/ops.log）。
 
 ## 报错自救（exit code）
 

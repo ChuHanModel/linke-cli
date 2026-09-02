@@ -72,13 +72,22 @@ test('成绩回流同意流程：首次开启打印三要素（上传什么/去�
 
 // ---------- T19 二期B ----------
 
-test('写域零暴露：rankings/comments 命令链路无任何评价写接口（源码断言）', () => {
+test('写域分层（T19 读命令 + T21 白名单写命令）：读命令函数体无写接口，教务写全仓零命中', () => {
   const bin = fs.readFileSync(path.join(here, '..', 'src', 'bin.js'), 'utf8')
-  const linkeapi = fs.readFileSync(path.join(here, '..', 'src', 'linkeapi.js'), 'utf8')
-  const appapi = fs.readFileSync(path.join(here, '..', 'src', 'appapi.js'), 'utf8')
-  const all = bin + linkeapi + appapi
-  for (const banned of ['PostComment', 'UpdateComment', 'DeleteComment', 'LikeComment', 'postComment', 'updateComment', 'deleteComment', 'likeComment']) {
-    assert.ok(!all.includes(banned), `写域接口 ${banned} 不得出现在 CLI 命令面`)
+  // T19 读命令函数体（rankings/comments/search/stats）不得含写接口
+  for (const fn of ['cmdRankings', 'cmdComments', 'cmdCourseSearch', 'cmdCourseStats']) {
+    const start = bin.indexOf('async function ' + fn)
+    if (start === -1) continue
+    const end = bin.indexOf('\nasync function', start + 20)
+    const body = bin.slice(start, end === -1 ? undefined : end)
+    for (const banned of ['PostComment', 'UpdateComment', 'DeleteComment', 'LikeComment']) {
+      assert.ok(!body.includes(banned), `${fn}（读命令）不得调用写接口 ${banned}`)
+    }
+  }
+  // 教务写操作全仓零命中（T21 红线：教务写永久不接）
+  const all = bin + fs.readFileSync(path.join(here, '..', 'src', 'writeops.js'), 'utf8')
+  for (const banned of ['bkbm_bm_save', 'bkbm_bm_cancel', 'xsxk/xsxk', 'LogonOut', 'grsz_xgmm', 'grsz_xggrxx']) {
+    assert.ok(!all.includes(banned), `教务写操作端点 ${banned} 不得出现在 CLI`)
   }
 })
 
