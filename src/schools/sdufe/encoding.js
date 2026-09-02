@@ -1,5 +1,5 @@
 /**
- * 正方教务（jsxsd）登录密码加密。
+ * 强智教务（Kingosoft，jsxsd 路径）登录密码加密。
  * 与 App 端 services/auth/jwLoginService.js computeEncoded 逐字节同源；
  * 算法：账号%%%密码 的前 20 个字符，每个字符后按 sxh 对应位数字
  * 从 scode 头部取 N 个字符插入；20 字符之后原样拼接。

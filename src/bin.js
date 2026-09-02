@@ -30,6 +30,10 @@ const USAGE = `linke —— 林课教务 CLI（只读查询，供 agent / 人类
   linke status                                         配置与教务会话状态（JSON）
   linke scores [--term 2025-2026-1]                    成绩查询（缺省=全部学期）
   linke schedule [--term 2025-2026-1] [--week 3]       课表查询（缺省=当前学期全部周）
+  linke credits                                        学分修读（类别统计 + 通选课明细）
+  linke courses [--term 2025-2026-1] [--type 通选]     全校课程查询（可再加 --dept 院系代码
+                                                       --name 课程名 --teacher 教师）
+  linke me                                             当前登录身份（学号/姓名/院系/班级/教学周）
   linke schools                                        列出可用学校适配器
   linke skill install [--path ~/.agents/skills]        安装 agent skill 说明书
   linke logout                                         清除本机教务 session（保留凭据）
@@ -277,6 +281,54 @@ async function cmdSchedule(flags) {
   return 0
 }
 
+async function cmdCredits() {
+  const config = requireConfig()
+  const credits = await withSession(config, (adapter, session) =>
+    adapter.fetchCredits(session.cookie)
+  )
+  emitJson(credits)
+  return 0
+}
+
+async function cmdCourses(flags) {
+  const config = requireConfig()
+  const query = {
+    term: flags.term ? String(flags.term) : '',
+    type: flags.type && flags.type !== true ? String(flags.type) : '',
+    department: flags.dept && flags.dept !== true ? String(flags.dept) : '',
+    courseName: flags.name && flags.name !== true ? String(flags.name) : '',
+    teacher: flags.teacher && flags.teacher !== true ? String(flags.teacher) : '',
+  }
+  const result = await withSession(config, async (adapter, session) => {
+    if (!query.term) {
+      query.term = (await adapter.fetchCurrentTerm(session.cookie)) || ''
+      if (!query.term) progress('未能解析当前学期，交给教务默认值')
+      else progress(`当前学期: ${query.term}`)
+    }
+    const courses = await adapter.fetchCourses(session.cookie, query)
+    return { term: query.term || null, type: query.type || null, ...courses }
+  })
+  emitJson(result)
+  return 0
+}
+
+async function cmdMe() {
+  const config = requireConfig()
+  const me = await withSession(config, async (adapter, session) => {
+    const userInfo = await adapter.probeSession(session.cookie) // 实时探活取身份
+    return {
+      userId: config.userId,
+      name: userInfo.name || '',
+      unit: userInfo.unit || '',
+      discipline: userInfo.discipline || '',
+      class: userInfo.class || '',
+      week: userInfo.week || null,
+    }
+  })
+  emitJson(me)
+  return 0
+}
+
 async function cmdSchools() {
   emitJson(listAdapters())
   return 0
@@ -335,6 +387,12 @@ async function dispatch(argv) {
       return cmdScores(flags)
     case 'schedule':
       return cmdSchedule(flags)
+    case 'credits':
+      return cmdCredits()
+    case 'courses':
+      return cmdCourses(flags)
+    case 'me':
+      return cmdMe()
     case 'schools':
       return cmdSchools()
     case 'skill':

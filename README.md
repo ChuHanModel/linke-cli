@@ -1,6 +1,6 @@
 # linke-cli
 
-林课教务 CLI：把山财教务（正方 jsxsd）的只读查询能力封装为本机命令行
+林课教务 CLI：把山财教务（强智教务 Kingosoft）的只读查询能力封装为本机命令行
 工具，供人类与 AI agent（Claude Code / ZCode 等）通过 shell 调用。
 
 架构对标 lark-cli：**CLI 承载全部复杂度，skill 保持极薄**。随包分发一份

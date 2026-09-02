@@ -16,14 +16,26 @@ import {
   parseCurrentTerm,
   parseScheduleHtml,
   parseScoresHtml,
+  parseCreditsHtml,
+  parseCoursesHtml,
 } from './parsers.js'
 
 const USER_AGENT = 'Apifox/1.0.0 (https://apifox.com)'
 const REQUEST_TIMEOUT_MS = 20000
 
+/** 课程属性中文名 → zzdKcSX 表单码（强智 kbxx_kc_ifr 口径） */
+export const COURSE_TYPE_MAP = {
+  必修: '1',
+  实践选修: '2',
+  专选: '3',
+  通选: '4',
+  实践必修: '5',
+  其它: '9',
+}
+
 export const sdufeAdapter = {
   id: 'sdufe',
-  name: '山东财经大学（正方教务 jsxsd）',
+  name: '山东财经大学（强智教务）',
   baseUrl: 'http://jw.sdufe.edu.cn',
 
   /**
@@ -199,6 +211,35 @@ export const sdufeAdapter = {
       cookie,
     })
     return parseScoresHtml(res.text || '')
+  },
+
+  /** 抓学分修读（通选课统计，GET 直出） */
+  async fetchCredits(cookie) {
+    const res = await this.request(`${this.baseUrl}/jsxsd/xxwcqk/xstxkxdqk.do`, 'GET', { cookie })
+    return parseCreditsHtml(res.text || '')
+  },
+
+  /**
+   * 课程课表查询网格（全校课程维度，POST kbxx_kc_ifr）。
+   * @param {object} q { term 学期, type 课程属性(中文名或码), department
+   *   开课院系代码, courseName 课程名, teacher 教师 }——空参数不下发
+   *   （规格书样例口径：仅带非空字段）
+   */
+  async fetchCourses(cookie, { term = '', type = '', department = '', courseName = '', teacher = '' } = {}) {
+    const typeCode = COURSE_TYPE_MAP[type] || String(type || '')
+    const pairs = [
+      ['xnxqh', term],
+      ['kkyx', department],
+      ['zzdKcSX', typeCode],
+      ['kc', courseName],
+      ['skls', teacher],
+    ].filter(([, v]) => v !== '' && v !== undefined && v !== null)
+    const form = pairs.map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join('&')
+    const res = await this.request(`${this.baseUrl}/jsxsd/kbcx/kbxx_kc_ifr`, 'POST', {
+      body: form,
+      cookie,
+    })
+    return parseCoursesHtml(res.text || '')
   },
 
   /** session 探活：返回当前登录用户信息；过期抛 isJwLoginExpired 错误 */

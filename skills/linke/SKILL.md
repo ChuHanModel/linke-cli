@@ -1,7 +1,7 @@
 ---
 name: linke
-version: 0.4.0
-description: "林课教务查询 CLI（山东财经大学正方教务）：查课表、查成绩、看教务登录状态。当用户问「我这学期课表」「今天有什么课」「我的成绩/绩点」「挂了什么课」「教务登录状态」等教务只读信息时使用。登录全自动（验证码云端识别），无需用户介入。"
+version: 0.5.0
+description: "林课教务查询 CLI（山东财经大学强智教务）：查课表、查成绩、看教务登录状态。当用户问「我这学期课表」「今天有什么课」「我的成绩/绩点」「挂了什么课」「教务登录状态」等教务只读信息时使用。登录全自动（验证码云端识别），无需用户介入。"
 metadata:
   requires:
     bins: ["linke"]
@@ -10,7 +10,7 @@ metadata:
 
 # 林课教务查询（linke-cli skill）
 
-linke 是装在用户本机的教务只读查询工具（山东财经大学，正方 jsxsd 系统）。
+linke 是装在用户本机的教务只读查询工具（山东财经大学，强智教务系统）。
 复杂度全在 CLI 内；本 skill 只教你如何在 shell 里调用它。
 
 ## 前置检查
@@ -39,6 +39,9 @@ linke status
 | 单周课表 | `linke schedule --week 3` |
 | 全部成绩 | `linke scores` |
 | 指定学期成绩 | `linke scores --term 2025-2026-1` |
+| 学分修读（类别统计+通选课明细） | `linke credits` |
+| 全校课程查询 | `linke courses --term 2025-2026-1 --type 通选`（可加 `--dept 院系代码 --name 课程名 --teacher 教师`） |
+| 当前登录身份 | `linke me` |
 | 登录/配置状态 | `linke status` |
 
 ## 输出契约
@@ -47,10 +50,18 @@ linke status
 - 课表：`{ term, week, weeks: [[7 个格子] × 节次], remark? }`；每格
   `{ course, teacher, time, location }`，空格子四字段全空串。`weeks` 外层
   下标 = 节次-1，内层下标 = 星期-1（周一=0）。
-- 成绩：行数组 `[{ term, courseCode, courseName, scoreText, score, nature }]`；
+- 成绩：行数组 `[{ term, courseCode, courseName, credit, scoreText, score, nature }]`；
   数值成绩 `score` 为 0-100 整数，等级制（优/良/合格等）`score` 为 null、
   看 `scoreText`。`courseName` 取自成绩行内紧邻成绩的列，个别页面列序
   不同时可能为空，以 `courseCode` 为准。
+- 学分：`{ categories: [{ category, required, earned, inProgress }],
+  courses: [{ courseCode, courseName, credit, score, type }] }`——分类别
+  统计与通选课明细两块，空单元格为空串。
+- 全校课程：`{ term, type, total, courses: [...] }`，每行 `{ campus,
+  department, className, courseCode, courseName, weeks, time, location,
+  teacher, teacherCode, nature, credit, capacity }`（同一课程多条记录 =
+  多个教学班，按 courseCode+teacher 区分）。
+- 身份：`{ userId, name, unit, discipline, class, week: { now, all } }`。
 
 ## 报错自救（exit code）
 

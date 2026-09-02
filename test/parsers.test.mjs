@@ -1,5 +1,5 @@
 /**
- * 解析器测试：HTML 样例按正方页面真实怪癖手工构造
+ * 解析器测试：HTML 样例按强智教务页面真实怪癖手工构造
  * （含 </td></td> 双闭合、<td align=> 清洗后变 <tdalign= 等），
  * 正则口径移植自 linke_PHP Model 层与 uni-app 端现役实现。
  */
@@ -11,6 +11,8 @@ import {
   parseCurrentTerm,
   parseScheduleHtml,
   parseScoresHtml,
+  parseCreditsHtml,
+  parseCoursesHtml,
 } from '../src/schools/sdufe/parsers.js'
 import { isJwLoginExpired } from '../src/util.js'
 
@@ -123,7 +125,7 @@ test('parseScheduleHtml：登录页 HTML 抛 isJwLoginExpired', () => {
 
 // ---------- parseScoresHtml ----------
 
-/** 构造一行成绩（原始带空格 HTML，模拟正方 cjcx_list 真实怪癖：成绩列 </td></td> 双闭合） */
+/** 构造一行成绩（原始带空格 HTML，模拟强智 cjcx_list 真实怪癖：成绩列 </td></td> 双闭合） */
 function scoreRow({ seq = '1', term = '2024-2025-1', code = 'GS0001', col3 = '马克思主义基本原理', score = '88', jd = '3.8', xf = '3', nature = '通选', extra1 = '', extra2 = '' }) {
   return (
     `<tr><td>${seq}</td><td>${term}</td><td align="left">${code}</td><td align="left">${col3}</td>` +
@@ -132,7 +134,7 @@ function scoreRow({ seq = '1', term = '2024-2025-1', code = 'GS0001', col3 = '�
   )
 }
 
-test('parseScoresHtml：withLeading 变体整行解析（含课程名列）', () => {
+test('parseScoresHtml：withLeading 变体整行解析（含课程名与学分列，T10 口径）', () => {
   const html = '<table>' + scoreRow({}) + scoreRow({ seq: '2', code: 'GS0002', col3: '大学英语', score: '92', nature: '必修' }) + '</table>'
   const rows = parseScoresHtml(html)
   assert.equal(rows.length, 2)
@@ -140,12 +142,14 @@ test('parseScoresHtml：withLeading 变体整行解析（含课程名列）', ()
     term: '2024-2025-1',
     courseCode: 'GS0001',
     courseName: '马克思主义基本原理',
+    credit: '3',
     scoreText: '88',
     score: 88,
     nature: '通选',
   })
   assert.equal(rows[1].courseCode, 'GS0002')
   assert.equal(rows[1].score, 92)
+  assert.equal(rows[1].credit, '3')
 })
 
 test('parseScoresHtml：等级制成绩 score=null、scoreText 保留', () => {
@@ -196,4 +200,119 @@ test('parseScoresHtml：legacy 变体兜底（无学期列，课程号在前）'
 
 test('parseScoresHtml：整页零命中抛 PARSE 错误', () => {
   assert.throws(() => parseScoresHtml('<table><tr><td>无关页面</td></tr></table>'), (err) => err.code === 'PARSE')
+})
+
+// ---------- parseCreditsHtml（T10：真实页双表结构）----------
+
+function creditsPage() {
+  return `
+  <div class="Nsb_layout_r title">通选课修读情况</div>
+  <table width="100%" class="Nsb_r_list Nsb_table">
+    <tr><th class="Nsb_r_list_thb" scope="col">类别</th>
+        <th class="Nsb_r_list_thb" scope="col">要求学分（大于等于）</th>
+        <th class="Nsb_r_list_thb" scope="col">已修学分</th>
+        <th class="Nsb_r_list_thb" scope="col">正在修读</th></tr>
+    <tr><td align="center">安全教育类</td><td align="center"></td><td align="center">1</td><td align="center"></td></tr>
+    <tr><td align="center">财经特色类</td><td align="center">2</td><td align="center">4</td><td align="center">3</td></tr>
+  </table>
+  <table width="100%" class="Nsb_r_list Nsb_table">
+    <tr><th>课程编号</th><th>课程名称</th><th>学分</th><th>总成绩</th><th>通选课类别</th></tr>
+    <tr><td></td><td></td><td></td><td></td><td></td></tr>
+    <tr><td>41100661</td><td>排球</td><td>1</td><td>91</td><td>体育保健类</td></tr>
+    <tr><td>41100903</td><td>劳动与劳动关系管理</td><td>1</td><td>92</td><td>劳动教育类</td></tr>
+  </table>`
+}
+
+test('parseCreditsHtml：类别统计 + 通选课明细双表解析（真实页结构）', () => {
+  const result = parseCreditsHtml(creditsPage())
+  assert.equal(result.categories.length, 2)
+  assert.deepEqual(result.categories[0], {
+    category: '安全教育类',
+    required: '',
+    earned: '1',
+    inProgress: '',
+  })
+  assert.deepEqual(result.categories[1], {
+    category: '财经特色类',
+    required: '2',
+    earned: '4',
+    inProgress: '3',
+  })
+  assert.equal(result.courses.length, 2) // 空编号行跳过
+  assert.deepEqual(result.courses[0], {
+    courseCode: '41100661',
+    courseName: '排球',
+    credit: '1',
+    score: '91',
+    type: '体育保健类',
+  })
+})
+
+test('parseCreditsHtml：登录页 HTML 抛 isJwLoginExpired；无表抛 PARSE', () => {
+  try {
+    parseCreditsHtml('<html>用户登录</html>')
+    assert.fail('应抛错')
+  } catch (err) {
+    assert.equal(err.isJwLoginExpired, true)
+  }
+  assert.throws(() => parseCreditsHtml('<table><tr><td>无关</td></tr></table>'), (err) => err.code === 'PARSE')
+})
+
+// ---------- parseCoursesHtml（T10：kbxx_kc_ifr 数据网格）----------
+
+function courseRow(cells) {
+  // 真实口径：单元格 &nbsp; 包裹 + 属性齐全
+  return '<tr>' + cells.map((c) => `<td width="123" height="28" align="center" valign="top"> &nbsp;${c}&nbsp; </td>`).join('') + '</tr>'
+}
+
+function coursesPage() {
+  const headers = ['校区', '上课学院', '上课班级', '课程编号', '课程名称', '上课周次', '上课时间', '上课地点', '授课教师', '教工号', '课程性质', '学分', '上课人数']
+  return (
+    '<table>' +
+    '<tr>' + headers.map((h) => `<th height="28" align="center" >${h}</th>`).join('') + '</tr>' +
+    '<tr>' + headers.map(() => '<td></td>').join('') + '</tr>' + // 真实页存在的整行空行
+    courseRow(['舜耕校区', '保险学院', '临班46', '41100096', '个人理财学', '1-11', '1091011', '1106(舜耕)', '王琳', '20028553', '通选', '2', '180']) +
+    courseRow(['舜耕校区', '工商管理学院', '工商1班', '41100097', '市场营销学', '1-16', '30405', 'A303(舜耕)', '赵强', '20028554', '通选', '2', '95']) +
+    '</table>'
+  )
+}
+
+test('parseCoursesHtml：13 列网格按表头映射（&nbsp; 清洗、空行跳过）', () => {
+  const result = parseCoursesHtml(coursesPage())
+  assert.equal(result.total, 2)
+  assert.deepEqual(result.courses[0], {
+    campus: '舜耕校区',
+    department: '保险学院',
+    className: '临班46',
+    courseCode: '41100096',
+    courseName: '个人理财学',
+    weeks: '1-11',
+    time: '1091011',
+    location: '1106(舜耕)',
+    teacher: '王琳',
+    teacherCode: '20028553',
+    nature: '通选',
+    credit: '2',
+    capacity: '180',
+  })
+  assert.equal(result.courses[1].courseName, '市场营销学')
+})
+
+test('parseCoursesHtml：缺上课人数列时不输出 capacity；登录页抛 isJwLoginExpired', () => {
+  const noCapacity =
+    '<table>' +
+    '<tr><th>课程编号</th><th>课程名称</th><th>授课教师</th><th>学分</th></tr>' +
+    courseRow(['GS0001', '个人理财学', '王琳', '2']) +
+    '</table>'
+  const result = parseCoursesHtml(noCapacity)
+  assert.equal(result.total, 1)
+  assert.equal(result.courses[0].courseCode, 'GS0001')
+  assert.equal(result.courses[0].credit, '2')
+  assert.ok(!('capacity' in result.courses[0]))
+  try {
+    parseCoursesHtml('<html>用户登录</html>')
+    assert.fail('应抛错')
+  } catch (err) {
+    assert.equal(err.isJwLoginExpired, true)
+  }
 })

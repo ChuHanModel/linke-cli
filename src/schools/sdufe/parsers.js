@@ -1,5 +1,5 @@
 /**
- * 山财正方教务（jsxsd）页面解析器。
+ * 山财强智教务（Kingosoft）页面解析器。
  * 正则全部移植自现役实现，脱节时以仓库真实代码为准回灌：
  * - 课表：linke_PHP/Api/src/app/Model/UserSchedule.php getSchedule()
  *         + linke_App/utils/scheduleLoader.js（周循环抓取版）
@@ -97,12 +97,54 @@ export function parseScheduleHtml(html) {
 const INVALID_SCORE_TEXTS = new Set(['-', '--', '---', '—', '暂无', '暂未录入', '未录入', '未公布', '无'])
 const TERM_RE = /^\d{4}-\d{4}-\d$/
 
+/** 单元格清洗：剥标签、&nbsp; 转空格、实体解码、收紧空白 */
+function cleanCell(raw) {
+  return String(raw ?? '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"')
+    .replace(/[\u00a0\u3000]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
 /**
- * 解析成绩页 HTML → 行数组 [{ term, courseCode, courseName, scoreText, score, nature }]
+ * 按 th 表头解析一张 HTML 表 → { headers, rows }。
+ * rows 为与表头等长的字符串数组（缺失列补空串，多余列丢弃），
+ * 列序以 th 顺序为准——教务加列/换列位时解析仍对位。
+ */
+function parseTableByHeader(tableHtml) {
+  const headers = Array.from(tableHtml.matchAll(/<th\b[^>]*>([\s\S]*?)<\/th>/gi))
+    .map((m) => cleanCell(m[1]))
+  const rows = []
+  for (const m of tableHtml.matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/gi)) {
+    const tr = m[1]
+    if (/<th\b/i.test(tr)) continue // 表头行
+    const cells = Array.from(tr.matchAll(/<td\b[^>]*>([\s\S]*?)<\/td>/gi)).map((c) => cleanCell(c[1]))
+    if (cells.length === 0) continue
+    rows.push(headers.map((_, i) => cells[i] ?? ''))
+  }
+  return { headers, rows }
+}
+
+/** 在整页里按表头特征找表（返回 { headers, rows } 或 null） */
+function findTableByHeaders(html, mustInclude) {
+  for (const m of html.matchAll(/<table\b[\s\S]*?<\/table>/gi)) {
+    const parsed = parseTableByHeader(m[0])
+    if (parsed.headers.length === 0) continue
+    if (mustInclude.every((h) => parsed.headers.some((x) => x.includes(h)))) {
+      return parsed
+    }
+  }
+  return null
+}
+
+/**
+ * 解析成绩页 HTML → 行数组 [{ term, courseCode, courseName, credit, scoreText, score, nature }]
  * 口径与 PHP reloadUserScoreRows 一致：数值成绩限 0-100 记入 score，
  * 等级制成绩保留 scoreText、score 为 null；无效占位文本丢弃。
- * courseName 取成绩行内紧邻成绩的列（现役页面为课程名，列序变化时可能为空，
- * 以 courseCode 为准）。
+ * T10：补捕获学分列（真实页列序 序号/学期/编号/名称/成绩/学分/绩点/
+ * 考试性质/课程性质/课程属性/辅修——学分紧跟成绩双闭合单元格后）。
  */
 export function parseScoresHtml(html) {
   if (isJwLoginExpired(html)) {
@@ -112,7 +154,7 @@ export function parseScoresHtml(html) {
   }
   const cleaned = stripSpaces(html)
   const rows = []
-  const addRow = (term, courseCode, courseName, scoreText, nature) => {
+  const addRow = (term, courseCode, courseName, credit, scoreText, nature) => {
     term = String(term ?? '').trim()
     courseCode = String(courseCode ?? '').trim()
     scoreText = String(scoreText ?? '').trim()
@@ -128,25 +170,26 @@ export function parseScoresHtml(html) {
       term,
       courseCode,
       courseName: String(courseName ?? '').trim(),
+      credit: String(credit ?? '').trim(),
       scoreText,
       score,
       nature: String(nature ?? '').trim(),
     })
   }
 
-  // 变体一：行首带学期列（现役主口径，PHP matchesWithLeading）
+  // 变体一：行首带序号列，第二列学期（现役主口径，PHP matchesWithLeading）
   const withLeading = Array.from(
     cleaned.matchAll(
-      /<tr><td>.*?<\/td><td>(.*?)<\/td><tdalign=.*?>(.*?)<\/td><tdalign=.*?>(.*?)<\/td><!--控制成绩显示--><tdstyle=.*?><ahref=.*?>(.*?)<\/a><\/td><\/td><td>.*?<\/td><!--控制绩点显示--><td>.*?<\/td><td>.*?<\/td><td>(.*?)<\/td><td>.*?<\/td><td>.*?<\/td><\/tr>/g
+      /<tr><td>.*?<\/td><td>(.*?)<\/td><tdalign=.*?>(.*?)<\/td><tdalign=.*?>(.*?)<\/td><!--控制成绩显示--><tdstyle=.*?><ahref=.*?>(.*?)<\/a><\/td><\/td><td>(.*?)<\/td><!--控制绩点显示--><td>.*?<\/td><td>.*?<\/td><td>(.*?)<\/td><td>.*?<\/td><td>.*?<\/td><\/tr>/g
     )
   )
   for (const m of withLeading) {
     const col1 = m[1] ?? ''
     const col2 = m[2] ?? ''
     if (TERM_RE.test(col1)) {
-      addRow(col1, col2, m[3], m[4], m[5])
+      addRow(col1, col2, m[3], m[5], m[4], m[6])
     } else if (TERM_RE.test(col2)) {
-      addRow(col2, col1, m[3], m[4], m[5])
+      addRow(col2, col1, m[3], m[5], m[4], m[6])
     }
   }
 
@@ -154,11 +197,11 @@ export function parseScoresHtml(html) {
   if (rows.length === 0) {
     const legacy = Array.from(
       cleaned.matchAll(
-        /<tdalign=.*?>(.*?)<\/td><tdalign=.*?>(.*?)<\/td><!--控制成绩显示--><tdstyle=.*?><ahref=.*?>(.*?)<\/a><\/td><\/td><td>.*?<\/td><!--控制绩点显示--><td>.*?<\/td><td>.*?<\/td><td>(.*?)<\/td><td>.*?<\/td><td>.*?<\/td>/g
+        /<tdalign=.*?>(.*?)<\/td><tdalign=.*?>(.*?)<\/td><!--控制成绩显示--><tdstyle=.*?><ahref=.*?>(.*?)<\/a><\/td><\/td><td>(.*?)<\/td><!--控制绩点显示--><td>.*?<\/td><td>.*?<\/td><td>(.*?)<\/td><td>.*?<\/td><td>.*?<\/td>/g
       )
     )
     for (const m of legacy) {
-      addRow(m[2], m[1], '', m[3], m[4])
+      addRow(m[2], m[1], '', m[4], m[3], m[5])
     }
   }
 
@@ -166,4 +209,119 @@ export function parseScoresHtml(html) {
     throw parseError('成绩（整页未命中任何成绩行）')
   }
   return rows
+}
+
+/**
+ * 解析学分修读页（/jsxsd/xxwcqk/xstxkxdqk.do，GET 直出）。
+ * 真实结构双表：
+ *   汇总表 th=类别/要求学分（大于等于）/已修学分/正在修读
+ *   明细表 th=课程编号/课程名称/学分/总成绩/通选课类别
+ * → { categories: [{category, required, earned, inProgress}],
+ *     courses: [{courseCode, courseName, credit, score, type}] }
+ */
+export function parseCreditsHtml(html) {
+  if (isJwLoginExpired(html)) {
+    const err = new Error('jw login expired')
+    err.isJwLoginExpired = true
+    throw err
+  }
+  const summary = findTableByHeaders(html, ['类别', '要求学分'])
+  const detail = findTableByHeaders(html, ['课程编号', '总成绩'])
+  if (!summary && !detail) {
+    throw parseError('学分修读（未找到类别统计表或课程明细表）')
+  }
+  const categories = []
+  if (summary) {
+    const col = (h) => summary.headers.findIndex((x) => x.includes(h))
+    const iCat = col('类别')
+    const iReq = col('要求学分')
+    const iEarn = col('已修学分')
+    const iProg = col('正在修读')
+    for (const row of summary.rows) {
+      const category = row[iCat] ?? ''
+      if (!category) continue
+      categories.push({
+        category,
+        required: row[iReq] ?? '',
+        earned: row[iEarn] ?? '',
+        inProgress: row[iProg] ?? '',
+      })
+    }
+  }
+  const courses = []
+  if (detail) {
+    const col = (h) => detail.headers.findIndex((x) => x.includes(h))
+    const iCode = col('课程编号')
+    const iName = col('课程名称')
+    const iCredit = col('学分')
+    const iScore = col('总成绩')
+    const iType = col('通选课类别')
+    for (const row of detail.rows) {
+      const courseCode = row[iCode] ?? ''
+      if (!courseCode) continue
+      courses.push({
+        courseCode,
+        courseName: row[iName] ?? '',
+        credit: row[iCredit] ?? '',
+        score: row[iScore] ?? '',
+        type: iType >= 0 ? row[iType] ?? '' : '',
+      })
+    }
+  }
+  return { categories, courses }
+}
+
+/** kbxx_kc_ifr 课程网格表头 → 输出字段名（按表头名映射，列序变化不受影响） */
+const COURSE_GRID_FIELDS = [
+  ['校区', 'campus'],
+  ['上课学院', 'department'],
+  ['上课班级', 'className'],
+  ['课程编号', 'courseCode'],
+  ['课程名称', 'courseName'],
+  ['上课周次', 'weeks'],
+  ['上课时间', 'time'],
+  ['上课地点', 'location'],
+  ['授课教师', 'teacher'],
+  ['教工号', 'teacherCode'],
+  ['课程性质', 'nature'],
+  ['学分', 'credit'],
+  ['上课人数', 'capacity'],
+]
+
+/**
+ * 解析课程课表查询网格（POST /jsxsd/kbcx/kbxx_kc_ifr）。
+ * 真实结构单表 13 列（表头见 COURSE_GRID_FIELDS），579+ 数据行整齐 13 td，
+ * 单元格 &nbsp; 包裹；另存在整行空行。
+ * → { total, courses: [{campus, department, className, courseCode,
+ *     courseName, weeks, time, location, teacher, teacherCode,
+ *     nature, credit, capacity?}] }（capacity 仅在页面含该列时输出）
+ */
+export function parseCoursesHtml(html) {
+  if (isJwLoginExpired(html)) {
+    const err = new Error('jw login expired')
+    err.isJwLoginExpired = true
+    throw err
+  }
+  const table = findTableByHeaders(html, ['课程编号', '课程名称', '授课教师'])
+  if (!table) {
+    throw parseError('课程课表（未找到课程数据网格）')
+  }
+  const colMap = []
+  for (const [headerName, field] of COURSE_GRID_FIELDS) {
+    const idx = table.headers.findIndex((x) => x.includes(headerName))
+    if (idx >= 0) colMap.push([idx, field])
+  }
+  const courses = []
+  for (const row of table.rows) {
+    const item = {}
+    let courseCode = ''
+    for (const [idx, field] of colMap) {
+      const value = row[idx] ?? ''
+      item[field] = value
+      if (field === 'courseCode') courseCode = value
+    }
+    if (!courseCode) continue // 空行/表头重复行
+    courses.push(item)
+  }
+  return { total: courses.length, courses }
 }
