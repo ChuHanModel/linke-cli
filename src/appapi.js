@@ -5,8 +5,27 @@
  * （后端每日同步缓存），架构上不爬教务（T3 既有决策）。
  */
 import crypto from 'node:crypto'
+import fs from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { DEFAULT_API_BASE } from './config.js'
 import { networkError } from './errors.js'
+
+const CLI_VERSION = (() => {
+  try {
+    return JSON.parse(
+      fs.readFileSync(
+        path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'package.json'),
+        'utf8'
+      )
+    ).version
+  } catch {
+    return '0'
+  }
+})()
+
+/** CLI 客户端标记（T16 验收 8，配合 T20 后端构成统计；度量用途非安全边界） */
+export const CLI_USER_AGENT = `linke-cli/${CLI_VERSION}`
 
 const SIGN_KEY = 'Linke'
 
@@ -33,7 +52,10 @@ export async function callAppApi(service, params = {}, apiBase = DEFAULT_API_BAS
     // PhalApi 多数业务参数 source=post——统一 POST form（GET 类接口亦兼容）
     response = await fetch(`${apiBase.replace(/\?.*$/, '')}?${query}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'User-Agent': CLI_USER_AGENT,
+      },
       body: postBody.toString(),
       signal: AbortSignal.timeout(20000),
     })

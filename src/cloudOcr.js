@@ -10,6 +10,7 @@
  */
 import crypto from 'node:crypto'
 import { networkError } from './errors.js'
+import { CLI_USER_AGENT } from './appapi.js'
 
 const SERVICE = 'App.Captcha.Recognize'
 const SIGN_KEY = 'Linke'
@@ -33,7 +34,10 @@ export async function recognizeCaptcha(apiBase, imageBase64) {
   try {
     response = await fetch(buildSignedUrl(apiBase), {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json;charset=utf-8' },
+      headers: {
+        'Content-Type': 'application/json;charset=utf-8',
+        'User-Agent': CLI_USER_AGENT,
+      },
       body: JSON.stringify({ image_base64: pure }),
       signal: AbortSignal.timeout(20000),
     })

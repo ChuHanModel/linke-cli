@@ -81,3 +81,16 @@ test('写域零暴露：rankings/comments 命令链路无任何评价写接口�
     assert.ok(!all.includes(banned), `写域接口 ${banned} 不得出现在 CLI 命令面`)
   }
 })
+
+test('T16 验收 8：对后端的全部请求统一携带 UA linke-cli/<版本>（源码断言）', async () => {
+  const { CLI_USER_AGENT } = await import('../src/appapi.js')
+  assert.match(CLI_USER_AGENT, /^linke-cli\/\d+\.\d+\.\d+$/)
+  const appapi = fs.readFileSync(path.join(here, '..', 'src', 'appapi.js'), 'utf8')
+  const cloudOcr = fs.readFileSync(path.join(here, '..', 'src', 'cloudOcr.js'), 'utf8')
+  // 后端请求 fetch 处必须携带 UA
+  assert.ok(/'User-Agent': CLI_USER_AGENT/.test(appapi), 'appapi 请求须带 UA')
+  assert.ok(/'User-Agent': CLI_USER_AGENT/.test(cloudOcr), 'cloudOcr 请求须带 UA')
+  // 教务直连请求不得携带 CLI UA（区分后端标记与教务伪装 UA 两个语义）
+  const adapter = fs.readFileSync(path.join(here, '..', 'src', 'schools', 'sdufe', 'adapter.js'), 'utf8')
+  assert.ok(!adapter.includes('CLI_USER_AGENT'), '教务直连沿用既有 UA，不用 CLI 标记')
+})
