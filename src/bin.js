@@ -40,6 +40,11 @@ const USAGE = `linke —— 林课教务 CLI（只读查询，供 agent / 人类
   linke pyfa                                           培养方案明细（体系/学时/开课学期）
   linke exams [--term 2025-2026-2] [--kind 期末]       考试安排（期初|期中|期末，缺省全部）
   linke progress                                       学业完成情况（各修读方案进度）
+  linke levels|innovation|changes|warning|             长尾查询（表头自说明 JSON，空数据=无记录）：
+    recognized|mentor|thesis|social|messages|            等级考试/创新学分/学籍异动/学籍预警/
+    minor-plan|diversion                                 成绩认定/学业导师/论文成绩/社会考试/
+                                                          留言/辅修计划/专业方向分流
+  （以上长尾命令通用 --page N 翻页）
   linke me                                             当前登录身份（学号/姓名/院系/班级/教学周）
   linke schools                                        列出可用学校适配器
   linke skill install [--path ~/.agents/skills]        安装 agent skill 说明书
@@ -395,6 +400,66 @@ async function cmdProgress() {
   return 0
 }
 
+/**
+ * T13 长尾查询页配置（GET 直出 + pageIndex 翻页）。
+ * dropFirst：changes 数据行首列是「+」展开图标；social 两张表
+ * （报名列表 + 考级成绩）；diversion 合并专业/方向两个分流页。
+ */
+const SIMPLE_PAGES = {
+  levels: { path: '/jsxsd/kscj/djkscj_list', label: '等级考试成绩' },
+  innovation: { path: '/jsxsd/pyfa/cxxf_query', label: '创新学分' },
+  changes: { path: '/jsxsd/xsxj/xsydxx.do', label: '学籍异动', dropFirst: true },
+  warning: { path: '/jsxsd/xsxj/xsyjxx.do', label: '学籍预警' },
+  recognized: { path: '/jsxsd/kscj/cjrd_list', label: '成绩认定' },
+  mentor: { path: '/jsxsd/kscj/cjcx_xzds', label: '学业导师', note: '导师数据接口（facjdy_list）教务侧拦截，无分配时输出空表' },
+  thesis: { path: '/jsxsd/bysj/bydbcj.do', label: '毕业论文成绩', note: '低年级无记录为正常态' },
+  social: { path: '/jsxsd/xsdjks/xsdjks_list', label: '社会考试报名' },
+  messages: { path: '/jsxsd/ggly/ysly_query', label: '已收留言' },
+  'minor-plan': { path: '/jsxsd/fxgl/fxzxjh', label: '辅修执行计划' },
+  diversion: {
+    label: '专业/方向分流查询',
+    combined: [
+      { key: 'majorOptions', path: '/jsxsd/xsxj/toQueryZyfl.do', label: '可选专业' },
+      { key: 'directionOptions', path: '/jsxsd/xsxj/toQueryfxfl.do', label: '可选专业方向' },
+    ],
+  },
+}
+
+async function cmdSimplePage(name, flags) {
+  const config = requireConfig()
+  const spec = SIMPLE_PAGES[name]
+  const page = flags.page && flags.page !== true ? Number(flags.page) : 1
+  if (!Number.isInteger(page) || page < 1) {
+    progress('无效页码，按第 1 页查询')
+  }
+  const pageIndex = Number.isInteger(page) && page >= 1 ? page : 1
+  const result = await withSession(config, async (adapter, session) => {
+    if (spec.combined) {
+      const out = { label: spec.label }
+      for (const part of spec.combined) {
+        out[part.key] = await adapter.fetchSimplePage(session.cookie, part.path, { pageIndex })
+      }
+      return out
+    }
+    const base = await adapter.fetchSimplePage(session.cookie, spec.path, {
+      pageIndex,
+      dropFirst: spec.dropFirst === true,
+    })
+    const out = { label: spec.label, page: pageIndex, ...base }
+    if (spec.path === '/jsxsd/xsdjks/xsdjks_list') {
+      // social 第二张表：考级成绩记录
+      out.records = await adapter.fetchSimplePage(session.cookie, spec.path, {
+        pageIndex,
+        tableIndex: 1,
+      })
+    }
+    if (spec.note) out.note = spec.note
+    return out
+  })
+  emitJson(result)
+  return 0
+}
+
 async function cmdSchools() {
   emitJson(listAdapters())
   return 0
@@ -469,6 +534,18 @@ async function dispatch(argv) {
       return cmdExams(flags)
     case 'progress':
       return cmdProgress()
+    case 'levels':
+    case 'innovation':
+    case 'changes':
+    case 'warning':
+    case 'recognized':
+    case 'mentor':
+    case 'thesis':
+    case 'social':
+    case 'messages':
+    case 'minor-plan':
+    case 'diversion':
+      return cmdSimplePage(command, flags)
     case 'me':
       return cmdMe()
     case 'schools':

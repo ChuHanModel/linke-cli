@@ -1,6 +1,6 @@
 ---
 name: linke
-version: 0.7.0
+version: 0.8.0
 description: "林课教务查询 CLI（山东财经大学强智教务）：查课表、查成绩、看教务登录状态。当用户问「我这学期课表」「今天有什么课」「我的成绩/绩点」「挂了什么课」「教务登录状态」等教务只读信息时使用。登录全自动（验证码云端识别），无需用户介入。"
 metadata:
   requires:
@@ -47,6 +47,7 @@ linke status
 | 培养方案明细（体系/学时） | `linke pyfa` |
 | 考试安排 | `linke exams --term 2025-2026-2 --kind 期末`（kind 支持 期初|期中|期末，缺省全部；考试未发布时 exams 为空数组） |
 | 学业完成情况 | `linke progress`（各修读方案的性质汇总+课程修读明细） |
+| 长尾查询（表头自说明 JSON） | `linke levels`（等级考试）/ `innovation`（创新学分）/ `changes`（学籍异动）/ `warning`（学籍预警）/ `recognized`（成绩认定）/ `mentor`（导师，接口受限时为空）/ `thesis`（论文成绩，低年级空为正常）/ `social`（社会考试，含 records 考级成绩）/ `messages`（留言）/ `minor-plan`（辅修计划）/ `diversion`（专业方向分流）。通用 `--page N` 翻页；`rows` 空数组=教务无记录 |
 | 当前登录身份 | `linke me` |
 | 登录/配置状态 | `linke status` |
 
@@ -80,6 +81,8 @@ linke status
   location, seat, admissionTicket }] }`。
 - 完成情况：`{ plans: [{ type, name, summary: [{ nature, required,
   earned, inProgress, remaining }], courses: [...] }] }`。
+- 长尾命令：`{ label, page, headers: [中文表头…], rows: [[…]] }`——
+  列含义以 headers 为准（教务列序变化时自洽），空数组=无记录。
 - 身份：`{ userId, name, unit, discipline, class, week: { now, all } }`。
 
 ## 报错自救（exit code）

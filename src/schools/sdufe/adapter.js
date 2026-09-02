@@ -25,6 +25,7 @@ import {
   parseExamsHtml,
   parseProgressPlansHtml,
   parseProgressDetailHtml,
+  parseSimpleTable,
 } from './parsers.js'
 
 const USER_AGENT = 'Apifox/1.0.0 (https://apifox.com)'
@@ -308,6 +309,19 @@ export const sdufeAdapter = {
       results.push({ type: plan.type, name: plan.name, ...detail })
     }
     return { plans: results }
+  },
+
+  /**
+   * T13 通用简表页抓取（GET 直出 + pageIndex 翻页）。
+   * @param {string} path 教务路径（如 /jsxsd/xsxj/xsydxx.do）
+   * @param {object} options { pageIndex 页码（默认 1），dropFirst
+   *   数据行首列丢弃（changes 展开图标列），tableIndex 取第几张含
+   *   th 的表（social 第二张为考级成绩） }
+   */
+  async fetchSimplePage(cookie, path, { pageIndex = 1, dropFirst = false, tableIndex = 0 } = {}) {
+    const sep = path.includes('?') ? '&' : '?'
+    const res = await this.request(`${this.baseUrl}${path}${sep}pageIndex=${pageIndex}`, 'GET', { cookie })
+    return parseSimpleTable(res.text || '', { dropFirst, tableIndex })
   },
 
   /** session 探活：返回当前登录用户信息；过期抛 isJwLoginExpired 错误 */

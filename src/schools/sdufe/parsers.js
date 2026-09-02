@@ -715,3 +715,56 @@ export function parseProgressDetailHtml(html) {
   }
   return { summary, courses }
 }
+
+/**
+ * T13 通用简表解析：整页第一张含 th 的数据表 → { headers, rows }。
+ * rows 为字符串数组（与表头等长：短行补空、超长截断），表头保留
+ * 原文（中文自说明，重复表头如 levels 的双「笔试/机试/总成绩」
+ * 原样保留，按列位对应）。教务改版加列/换列序时输出仍自洽。
+ * @param {object} options
+ * @param {string} options.emptyText 空数据页特征文本（默认「未查询到数据」）
+ * @param {boolean} options.dropFirst 数据行首列丢弃（changes 的「+」展开图标列）
+ */
+export function parseSimpleTable(html, { emptyText = '未查询到数据', dropFirst = false, tableIndex = 0 } = {}) {
+  if (typeof html === 'string' && html.includes('非法访问')) {
+    throw parseError('教务返回非法访问（接口未开放或入口受限）')
+  }
+  // 加载中壳页（如导师页）短小无表，会被登录过期判据误吞——先判
+  if (
+    typeof html === 'string' &&
+    html.includes('正在拼命加载中') &&
+    !/<th\b/i.test(html)
+  ) {
+    return { headers: [], rows: [] }
+  }
+  if (isJwLoginExpired(html)) {
+    const err = new Error('jw login expired')
+    err.isJwLoginExpired = true
+    throw err
+  }
+  // 全页含 th 的表按序取第 tableIndex 张；dropFirst 须在截齐前生效，
+  // 故自行展开 cells（parseTableByHeader 的 rows 已按表头截齐）
+  const candidates = []
+  for (const m of html.matchAll(/<table\b[\s\S]*?<\/table>/gi)) {
+    const headers = Array.from(m[0].matchAll(/<th\b[^>]*>([\s\S]*?)<\/th>/gi))
+      .map((h) => cleanCell(h[1]))
+    if (headers.length === 0) continue
+    const rows = []
+    for (const r of m[0].matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/gi)) {
+      if (/<th\b/i.test(r[1])) continue
+      let cells = Array.from(r[1].matchAll(/<td\b[^>]*>([\s\S]*?)<\/td>/gi)).map((c) => cleanCell(c[1]))
+      if (cells.length === 0) continue
+      if (dropFirst) cells = cells.slice(1)
+      rows.push(headers.map((_, i) => cells[i] ?? ''))
+    }
+    candidates.push({ headers, rows })
+  }
+  const table = candidates[tableIndex] || null
+  if (!table || table.headers.length === 0) {
+    throw parseError('简表（未找到数据表）')
+  }
+  if (html.includes(emptyText)) {
+    return { headers: table.headers, rows: [] }
+  }
+  return { headers: table.headers, rows: table.rows }
+}
