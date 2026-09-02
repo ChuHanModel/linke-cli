@@ -13,6 +13,7 @@ import http from 'node:http'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 const realHome = process.env.HOME
 
@@ -251,9 +252,34 @@ test('GET / 无令牌或错令牌 403；带令牌返回登录页（会话内）'
       assert.equal((await fetch(`${base}/?t=deadbeef`)).status, 403)
       const ok = await fetch(handle.urls.local)
       assert.equal(ok.status, 200)
-      assert.ok((await ok.text()).includes('linke CLI'))
+      const html = await ok.text()
+      assert.ok(html.includes('密码只保存在这台电脑上'), '页面应包含唯一的信任声明行')
     })
   })
+})
+
+test('页面文案卫生（T7 验收 6b）：登录页不含技术术语/命令名/包名', async () => {
+  // 守卫回归：6b 要求页面口语化，禁止出现 令牌/会话/Origin/DNS、
+  // 命令名与包名（linke）、实现细节（权限 600 / 路径）
+  const fsSync = await import('node:fs')
+  const html = fsSync.readFileSync(
+    path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', 'web', 'login.html'),
+    'utf8'
+  )
+  const forbidden = [
+    /linke/i,      // 包名/命令名
+    /令牌/,
+    /会话/,
+    /Origin/i,
+    /DNS/i,
+    /权限\s*600/,
+    /~\/\.linke/,
+    /rebinding/i,
+  ]
+  for (const re of forbidden) {
+    assert.ok(!re.test(html), `登录页不应出现: ${re}`)
+  }
+  assert.ok(html.includes('密码只保存在这台电脑上'))
 })
 
 test('防 DNS rebinding：域名 Host 被拒（原生 http 控制 Host 头）', async () => {

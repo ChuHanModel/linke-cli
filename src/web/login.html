@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>linke · 教务账号配置</title>
+<title>教务账号登录</title>
 <style>
   :root { color-scheme: light dark; }
   * { box-sizing: border-box; }
@@ -18,8 +18,8 @@
     padding: 28px 24px; box-shadow: 0 4px 24px rgba(0,0,0,.08);
   }
   @media (prefers-color-scheme: dark) { .card { background: #1d2126; } }
-  h1 { font-size: 18px; margin: 0 0 4px; }
-  .sub { font-size: 13px; color: #6a737d; margin-bottom: 20px; line-height: 1.6; }
+  h1 { font-size: 18px; margin: 0 0 6px; }
+  .sub { font-size: 13px; color: #6a737d; margin-bottom: 18px; line-height: 1.6; }
   @media (prefers-color-scheme: dark) { .sub { color: #9aa4af; } }
   label { display: block; font-size: 13px; margin: 14px 0 6px; }
   input {
@@ -36,7 +36,6 @@
   .msg { margin-top: 16px; font-size: 13px; line-height: 1.7; display: none; white-space: pre-line; }
   .msg.cred { display: block; color: #cf222e; }
   .msg.svc { display: block; color: #9a6700; }
-  /* 验证中 */
   .verifying { display: none; text-align: center; padding: 18px 0 8px; }
   .verifying .spinner {
     width: 34px; height: 34px; margin: 0 auto 14px; border-radius: 50%;
@@ -47,7 +46,6 @@
   @keyframes spin { to { transform: rotate(360deg); } }
   .verifying p { font-size: 14px; color: #6a737d; line-height: 1.7; }
   @media (prefers-color-scheme: dark) { .verifying p { color: #9aa4af; } }
-  /* 成功 */
   .success { display: none; text-align: center; padding: 10px 0 0; }
   .success .mark { font-size: 40px; line-height: 1; }
   .success h2 { font-size: 17px; margin: 10px 0 6px; }
@@ -58,38 +56,34 @@
     font-size: 13px; line-height: 1.8; text-align: left;
   }
   @media (prefers-color-scheme: dark) { .success .next { background: #1b2635; } }
-  .success .next code { background: rgba(175,184,193,.25); padding: 1px 6px; border-radius: 4px; }
+  .success .done { margin-top: 14px; font-size: 13px; color: #1a7f37; }
 </style>
 </head>
 <body>
   <main class="card">
-    <h1>林课 linke · 教务账号配置</h1>
-    <p class="sub">此页面由<strong>你本机的 linke CLI</strong> 提供，密码只保存在本机
-    （~/.linke-cli/，权限 600），不会发送到任何服务器。</p>
+    <h1>教务账号登录</h1>
+    <p class="sub">密码只保存在这台电脑上，不会发送到任何服务器。</p>
 
     <form id="form">
       <label for="userId">学号</label>
       <input id="userId" name="userId" autocomplete="username" inputmode="numeric" required>
       <label for="password">教务密码</label>
       <input id="password" name="password" type="password" autocomplete="current-password" required>
-      <button id="btn" type="submit">验证并保存</button>
+      <button id="btn" type="submit">登录</button>
     </form>
     <p id="msg" class="msg"></p>
 
     <div id="verifying" class="verifying">
       <div class="spinner"></div>
-      <p id="verifyText">正在验证教务登录…<br>（自动获取并识别验证码，约需数秒，请勿关闭本页）</p>
+      <p>正在验证…<br>（大约需要几秒钟，请别关掉这个页面）</p>
     </div>
 
     <div id="success" class="success">
       <div class="mark">✅</div>
-      <h2 id="okTitle">验证成功</h2>
+      <h2>登录成功</h2>
       <p class="info" id="okInfo"></p>
-      <div class="next">凭据已保存到本机（权限 600）。<br>
-        现在可以直接问你的 AI：<br>
-        <code>「我这周有什么课」「我的成绩怎么样」</code><br>
-        也可以在终端运行 <code>linke schedule</code> 查看。
-      </div>
+      <div class="next">现在可以直接问你的 AI：<br>「我这周有什么课」「我的成绩怎么样」</div>
+      <p class="done">都设置好啦，可以关闭这个页面了。</p>
     </div>
   </main>
 <script>
@@ -102,8 +96,6 @@
   const success = document.getElementById('success')
   const userIdInput = document.getElementById('userId')
   const passwordInput = document.getElementById('password')
-  const PROXY_HINT = '若本机运行 Clash / Stash / Surge 等代理或 TUN 工具，' +
-    '可能拦截了 localhost 请求——请为 localhost 加直连规则或暂时关闭后重试'
   let polling = null
   let pollFailures = 0
   let submittedOnce = false
@@ -113,7 +105,7 @@
     verifying.style.display = 'none'
     success.style.display = 'none'
     btn.disabled = false
-    btn.textContent = '验证并保存'
+    btn.textContent = '登录'
   }
   function showVerifying() {
     form.style.display = 'none'
@@ -126,32 +118,28 @@
     msg.className = 'msg'
     success.style.display = 'block'
     document.getElementById('okInfo').textContent = info
+    setTimeout(() => window.close(), 2500) // 关不掉就停留在「可关闭」状态页
   }
   function showBanner(text) {
     msg.className = 'msg svc'
     msg.textContent = text
   }
-  function clearBanner() {
-    if (!submittedOnce || polling) { msg.className = 'msg' }
-  }
   function renderFailResult(data) {
-    // 失败结果：回到表单（凭据错误重输 / 服务错误保留输入重发）
     showForm()
     if (data.type === 'credential') {
       msg.className = 'msg cred'
-      msg.textContent = '教务返回：' + (data.message || '账号或密码错误') + '。\n' +
-        '⚠️ 连续输错密码可能导致教务账号被锁定，请确认后重试' +
-        (data.remaining > 0 ? '（剩余 ' + data.remaining + ' 次尝试机会）。' : '。')
+      msg.textContent = '学号或密码不对。\n' +
+        '⚠️ 连续输错可能会锁住教务账号，请确认后再试' +
+        (data.remaining > 0 ? '（还剩 ' + data.remaining + ' 次机会）。' : '。')
     } else {
       msg.className = 'msg svc'
-      msg.textContent = (data.message || '网络或验证码识别服务异常') + '。\n' +
-        '这通常与账号密码无关，稍后重试即可' +
-        (data.remaining > 0 ? '（剩余 ' + data.remaining + ' 次）' : '') + '。'
+      msg.textContent = '刚才没验证成功：网络或验证码识别临时出了问题，和密码无关。\n' +
+        '稍等一下再试就行' + (data.remaining > 0 ? '（还剩 ' + data.remaining + ' 次）' : '') + '。'
     }
     if (data.final) {
       btn.disabled = true
-      btn.textContent = '已达尝试上限'
-      msg.textContent += '\n已达尝试上限（' + data.maxAttempts + ' 次），本服务即将关闭；请回终端重新运行 linke login。'
+      btn.textContent = '尝试次数已用完'
+      msg.textContent += '\n尝试次数用完了（共 ' + data.maxAttempts + ' 次），这个页面马上关闭；请回到电脑终端重新开始。'
     }
   }
 
@@ -164,16 +152,14 @@
         stopPoll()
         submittedOnce = false
         msg.className = 'msg svc'
-        msg.textContent = '登录服务已结束（成功、超时或达尝试上限）。\n' +
-          '请回终端查看结果；如需重新配置，请在终端重新运行 linke login。'
+        msg.textContent = '这个页面已经失效（可能已完成、超时或次数用完）。\n请回到电脑终端查看结果。'
         showForm()
         btn.disabled = true
-        btn.textContent = '会话已结束'
+        btn.textContent = '页面已失效'
         return
       }
       const data = await res.json()
       pollFailures = 0
-      clearBanner()
       if (data.status === 'verifying' || data.status === 'idle') return
       stopPoll()
       submittedOnce = false
@@ -182,19 +168,18 @@
         const lines = []
         if (s.name) lines.push('姓名：' + s.name)
         if (s.unit) lines.push(s.unit)
-        if (s.weekNow) lines.push('当前教学周：第 ' + s.weekNow + ' 周' + (s.weekAll ? ' / 共 ' + s.weekAll + ' 周' : ''))
-        showSuccess(lines.length ? lines.join('\n') : '教务登录验证通过，凭据已保存。')
+        if (s.weekNow) lines.push('当前是第 ' + s.weekNow + ' 周' + (s.weekAll ? '（共 ' + s.weekAll + ' 周）' : ''))
+        showSuccess(lines.length ? lines.join('\n') : '教务登录验证通过，密码已保存。')
         return
       }
       renderFailResult(data)
     } catch {
-      // 轮询失败 ≠ 提交失败（打回验收 9）：静默重试，持续失败才提示，
-      // 且绝不引导重复提交（防占用教务尝试次数）
+      // 联系不上服务 ≠ 提交失败：静默重试，持续失败才提示，绝不诱导重复提交
       pollFailures += 1
       if (pollFailures >= 12) {
-        showBanner('与服务联系中断（约 ' + Math.round(pollFailures * 0.8) + ' 秒无响应），仍在自动重试…\n' +
-          '⚠️ 请勿关闭本页或在此重复提交（重复提交会占用教务尝试次数，连续输错可能锁号）。\n' +
-          '可回终端查看验证是否已完成；若终端也已无响应，重新运行 linke login。')
+        showBanner('页面和服务失去联系（已经重试了约 10 秒），还在自动重试…\n' +
+          '请不要关掉页面，也不要再点「登录」——重复提交会占用尝试次数，连续输错可能锁号。\n' +
+          '可以先到电脑终端看看是不是已经完成了。')
       }
     }
   }
@@ -221,33 +206,32 @@
       if (!data.ok) throw new Error(data.error || '提交失败')
       submittedOnce = true
       showVerifying()
-      passwordInput.value = '' // 提交后即清空，避免长期驻留输入框
+      passwordInput.value = ''
       stopPoll()
       pollFailures = 0
       polling = setInterval(pollResult, 800)
       pollResult()
     } catch (err) {
-      // 提交 POST 失败（与轮询失败分开归因——打回验收 9）
       msg.className = 'msg svc'
-      msg.textContent = '提交失败：无法连接本机登录服务（' + (err.message || '网络异常') + '）。\n' +
-        '本次提交未送达，不会占用教务尝试次数，可稍后重试。\n' + PROXY_HINT + '。'
+      msg.textContent = '没能连上这台电脑上的登录页面服务，刚才的提交没有送出去（不会计入尝试次数）。\n' +
+        '如果你电脑开着 Clash、Stash、Surge 这类代理工具，它们可能拦住了本机地址——' +
+        '请把本地地址设为直连，或者暂时关掉代理再试。'
       btn.disabled = false
-      btn.textContent = '验证并保存'
+      btn.textContent = '登录'
     }
   })
 
-  // 页面（重）加载时恢复上下文（打回验收 11/12）：已提交过则给出
-  // 防重复警示，验证中则直接恢复验证态，避免用户无感重复提交
+  // 页面（重新）加载时恢复进度：已提交过就先提醒，防止无感重复提交
   ;(async function restoreState() {
     try {
       const res = await fetch('/state?t=' + encodeURIComponent(token))
-      if (res.status === 403) return // 会话结束，保持初始表单（提交会被拒）
+      if (res.status === 403) return
       const state = await res.json()
       if (state.attempts > 0) {
         msg.className = 'msg svc'
-        msg.textContent = '本会话已提交 ' + state.attempts + ' 次（上限 ' +
-          state.maxAttempts + '）。为避免教务账号因连续错密码被锁定，' +
-          '请确认凭据后再提交（剩余 ' + state.remaining + ' 次）。'
+        msg.textContent = '这个页面已经试过 ' + state.attempts + ' 次（最多 ' +
+          state.maxAttempts + ' 次）。连续输错可能会锁住教务账号，请确认密码后再提交（还剩 ' +
+          state.remaining + ' 次）。'
       }
       if (state.status === 'verifying') {
         showVerifying()
@@ -261,14 +245,14 @@
           const s = state.result.summary || {}
           const lines = []
           if (s.name) lines.push('姓名：' + s.name)
-          if (s.weekNow) lines.push('当前教学周：第 ' + s.weekNow + ' 周')
-          showSuccess(lines.length ? lines.join('\n') : '教务登录验证通过，凭据已保存。')
+          if (s.weekNow) lines.push('当前是第 ' + s.weekNow + ' 周')
+          showSuccess(lines.length ? lines.join('\n') : '教务登录验证通过，密码已保存。')
         } else {
           renderFailResult(state.result)
         }
       }
     } catch {
-      /* /state 获取失败不阻塞初始表单 */
+      /* 拿不到进度不碍事，正常显示表单 */
     }
   })()
 </script>
