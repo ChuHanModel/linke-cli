@@ -54,6 +54,8 @@ const USAGE = `linke —— 林课教务 CLI（只读查询，供 agent / 人类
   linke xk-logs [--term] [--round 轮次]                 选退课日志
   linke calendar [--term]                               教学周历
   linke textbooks / textbook-orders / thesis-guide      教材账目/选订教材/毕业过程指导（--page 翻页）
+  linke notices [--keyword 关键词] [--page N] [--size N]  教务公告（走林课后端每日同步缓存，
+                                                        唯一不经教务直连的命令）
   linke me                                             当前登录身份（学号/姓名/院系/班级/教学周）
   linke schools                                        列出可用学校适配器
   linke skill install [--path ~/.agents/skills]        安装 agent skill 说明书
@@ -505,6 +507,27 @@ const FORM_PAGES = {
   },
 }
 
+async function cmdNotices(flags) {
+  // 教务公告走林课后端 JwNotice API（公共数据每日同步缓存）——
+  // 不经教务直连，无需教务 session（T3 架构决策）
+  const { callAppApi } = await import('./appapi.js')
+  const { resolveConfig } = await import('./config.js')
+  const config = resolveConfig()
+  const keyword = str(flags.keyword)
+  const page = str(flags.page) || '1'
+  const pageSize = str(flags.size) || '20'
+  const service = keyword ? 'App.JwNotice.GetListFromDbByKeyword' : 'App.JwNotice.GetListFromDb'
+  const params = keyword ? { keyword, page, pageSize } : { page, pageSize }
+  const data = await callAppApi(service, params, config ? config.apiBase : undefined)
+  emitJson({
+    source: '林课后端每日同步缓存（jwc.sdufe.edu.cn）',
+    total: data.total ?? null,
+    page: Number(page),
+    list: data.list || [],
+  })
+  return 0
+}
+
 function str(v) {
   return v !== undefined && v !== true && v !== false ? String(v) : ''
 }
@@ -668,6 +691,8 @@ async function dispatch(argv) {
     case 'textbook-orders':
     case 'thesis-guide':
       return cmdSimplePage(command, flags)
+    case 'notices':
+      return cmdNotices(flags)
     case 'me':
       return cmdMe()
     case 'schools':
