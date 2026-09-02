@@ -15,6 +15,16 @@ import {
 import { installSkill, skillSourceDir } from './skill.js'
 import { ask, askPassword } from './prompt.js'
 import { emitJson, progress } from './util.js'
+import fsSync from 'node:fs'
+import pathSync from 'node:path'
+import { fileURLToPath as urlToPath } from 'node:url'
+
+function fsReadPkg() {
+  return fsSync.readFileSync(
+    pathSync.join(pathSync.dirname(urlToPath(import.meta.url)), '..', 'package.json'),
+    'utf8'
+  )
+}
 import { startLoginServer } from './loginserver.js'
 import { buildQr, renderTerminal } from './qr.js'
 import { exec } from 'node:child_process'
@@ -62,6 +72,11 @@ const USAGE = `linke —— 林课教务 CLI（只读查询，供 agent / 人类
   linke class-schedule --class <班级dm>                班级课表（班级 dm 从 linke classes 获取）
   linke progress [--by plan|nature|attr]               学业完成情况（plan=按修读方案缺省）
   linke me                                             当前登录身份（学号/姓名/院系/班级/教学周）
+  linke update                                          手动立即更新（透明链路；开发态跳过）
+  linke course-search <关键词>                          林课课程库检索（22k 用户共建数据）
+  linke course-stats <课程名或编号>                      课程给分统计（人数/均分/箱线图五数/挂科率）
+  linke rankings [--by star|score] [--limit 20]         林课榜单（评分榜/给分榜）
+  linke comments <课程名> [--page N]                    课程评论与综合评分（只读）
   linke schools                                        列出可用学校适配器
   linke skill install [--path ~/.agents/skills]        安装 agent skill 说明书
   linke logout                                         清除本机教务 session（保留凭据）
@@ -104,6 +119,43 @@ function requireConfig() {
 }
 
 async function cmdConfig(flags) {
+  if (flags['auto-update'] !== undefined || flags.sync !== undefined) {
+    const existing = resolveConfig()
+    if (!existing) throw configMissing()
+    const updates = {}
+    if (flags['auto-update'] !== undefined) {
+      const v = String(flags['auto-update'])
+      if (!['on', 'off'].includes(v)) {
+        progress('--auto-update 只支持 on|off')
+        return 1
+      }
+      updates.autoUpdate = v === 'on'
+    }
+    if (flags.sync !== undefined) {
+      const v = String(flags.sync)
+      if (!['on', 'off'].includes(v)) {
+        progress('--sync 只支持 on|off')
+        return 1
+      }
+      if (v === 'on' && existing.sync !== true) {
+        // 首次开启：三要素同意流程（T18 五红线之一）
+        progress('开启成绩回流前请确认以下三要素：')
+        progress('  · 上传什么：你的课程成绩与学号标识（userKey 匿名摘要）')
+        progress('  · 去哪里：林课服务器（api.linketeam.com）')
+        progress('  · 用来干嘛：汇入课程给分统计与排行榜，帮助其他同学选课')
+        const { ask } = await import('./prompt.js')
+        const answer = await ask('同意并开启？（输入 y 确认）: ')
+        if (answer.toLowerCase() !== 'y') {
+          progress('已取消，保持关闭')
+          return 0
+        }
+      }
+      updates.sync = v === 'on'
+    }
+    saveConfig({ ...loadConfigRaw(), ...updates })
+    progress('配置已更新: ' + JSON.stringify(updates))
+    return 0
+  }
   if (flags.clear) {
     clearConfig()
     clearSession()
@@ -139,9 +191,17 @@ async function cmdStatus() {
     return 0
   }
   const sessionInfo = await inspectSession(config)
+  let linkeAccount = null
+  try {
+    const { callAppApi } = await import('./appapi.js')
+    linkeAccount = await callAppApi('App.User.CheckUserExists', { userId: config.userId }, config.apiBase)
+  } catch {
+    linkeAccount = { error: '探测失败（网络）' }
+  }
   emitJson({
     configured: true,
     config: redactConfig(config),
+    linkeAccount,
     adapters,
     session: sessionInfo,
     skill: skillSourceDir(),
@@ -315,6 +375,7 @@ async function cmdCredits() {
     adapter.fetchCredits(session.cookie)
   )
   emitJson(credits)
+  await maybeSyncScores(config, credits) // T18 opt-in 回流（JSON 已输出后进行）
   return 0
 }
 
@@ -534,6 +595,121 @@ const FORM_PAGES = {
   },
 }
 
+function loadConfigRaw() {
+  return resolveConfig() || {}
+}
+
+/** 二期：课程库检索（App.Course.GetCourseByNameLike） */
+async function cmdCourseSearch(query) {
+  const config = requireConfig()
+  const { callLinkeApi } = await import('./linkeapi.js')
+  const data = await callLinkeApi(config, 'App.Course.GetCourseByNameLike', {
+    nameLike: query,
+  })
+  emitJson(data)
+  return 0
+}
+
+/** 二期：课程给分统计（先检索解析 courseId，再 GetCourseScoreStats） */
+async function cmdCourseStats(query) {
+  const config = requireConfig()
+  const { callLinkeApi } = await import('./linkeapi.js')
+  const searched = await callLinkeApi(config, 'App.Course.GetCourseByNameLike', {
+    nameLike: query,
+  })
+  const list = Array.isArray(searched) ? searched : searched.list || []
+  if (!list.length) {
+    emitJson({ query, matches: [], note: '课程库未命中该关键词' })
+    return 0
+  }
+  const first = list[0]
+  const stats = await callLinkeApi(config, 'App.UserScore.GetCourseScoreStats', {
+    courseId: first.courseId,
+  })
+  emitJson({ query, matched: { courseId: first.courseId, lessonName: first.lessonName || first.courseName || '' }, otherMatches: list.length - 1, stats })
+  return 0
+}
+
+/** 二期B：榜单（评分榜 star / 给分榜 score） */
+async function cmdRankings(flags) {
+  const config = requireConfig()
+  const { callLinkeApi } = await import('./linkeapi.js')
+  const by = str(flags.by) || 'star'
+  const limit = str(flags.limit) || '20'
+  if (!['star', 'score'].includes(by)) {
+    progress('--by 只支持 star|score')
+    return 1
+  }
+  const service = by === 'star' ? 'App.CourseRanking.GetRankingStarAVG' : 'App.CourseRanking.GetRankingScoreAVG'
+  const data = await callLinkeApi(config, service, { numberLimit: limit })
+  emitJson({ by, limit: Number(limit), ...(Array.isArray(data) ? { rankings: data } : data) })
+  return 0
+}
+
+/** 二期B：课程评论（只读；发评/点赞等写域红线不接） */
+async function cmdComments(query, flags) {
+  const config = requireConfig()
+  const { callLinkeApi } = await import('./linkeapi.js')
+  const searched = await callLinkeApi(config, 'App.Course.GetCourseByNameLike', { nameLike: query })
+  const list = Array.isArray(searched) ? searched : searched.list || []
+  if (!list.length) {
+    emitJson({ query, matches: [], note: '课程库未命中该关键词' })
+    return 0
+  }
+  const first = list[0]
+  const courseId = first.courseId
+  const page = str(flags.page) || '1'
+  const [count, rating, comments] = await Promise.all([
+    callLinkeApi(config, 'App.CourseComment.GetCommentCount', { courseId }),
+    callAppApiSafe('App.CourseComment.GetCourseRating', { courseId }, config),
+    callLinkeApi(config, 'App.CourseComment.GetComment', { courseId, page, pageSize: '20' }),
+  ])
+  emitJson({
+    query,
+    course: { courseId, lessonName: first.lessonName || first.courseName || '' },
+    commentCount: count,
+    rating,
+    comments,
+  })
+  return 0
+}
+
+async function callAppApiSafe(service, params, config) {
+  try {
+    const { callAppApi } = await import('./appapi.js')
+    return await callAppApi(service, params, config.apiBase)
+  } catch {
+    return null
+  }
+}
+
+/** T18 成绩回流（opt-in；仅 credits 命令触发；hash 无变化不传） */
+async function maybeSyncScores(config, creditsResult) {
+  const raw = loadConfigRaw()
+  if (raw.sync !== true) return // 默认关闭
+  try {
+    const fs = await import('node:fs')
+    const os = await import('node:os')
+    const pathMod = await import('node:path')
+    const crypto = await import('node:crypto')
+    const statePath = pathMod.join(os.homedir(), '.linke-cli', 'sync-state.json')
+    const payload = [{ courses: creditsResult.courses || [] }]
+    const hash = crypto.createHash('md5').update(JSON.stringify(payload)).digest('hex')
+    let state = {}
+    try { state = JSON.parse(fs.readFileSync(statePath, 'utf8')) } catch {}
+    if (state.hash === hash) return // 无变化不重传
+    const { callLinkeApi } = await import('./linkeapi.js')
+    const result = await callLinkeApi(config, 'App.UserScore.ImportScoresFromCredit', {
+      creditData: payload,
+    })
+    fs.mkdirSync(pathMod.dirname(statePath), { recursive: true })
+    fs.writeFileSync(statePath, JSON.stringify({ hash, syncedAt: new Date().toISOString() }))
+    progress(`成绩回流完成（opt-in，可用 linke config --sync off 关闭）: ${JSON.stringify(result).slice(0, 120)}`)
+  } catch (err) {
+    progress(`成绩回流失败（不影响查询结果）: ${err.message}`)
+  }
+}
+
 async function cmdNotices(flags) {
   // T17 双源现场获取（用户拍板：数据面零后端依赖——不经林课后端，
   // jwc=公开网站现场抓取，jw=教务已收公告直连）
@@ -750,6 +926,23 @@ function printUsage() {
 
 export async function runCli(argv) {
   try {
+    // T16 透明更新钩子（update/help 自身与 JSON 输出无碍：一切走 stderr）
+    const first = String(argv.find((a) => !a.startsWith('--')) || '')
+    if (!['update', 'help', 'skill', 'config'].includes(first)) {
+      const { maybeAutoUpdate } = await import('./updater.js')
+      const { version } = JSON.parse(
+        (await import('node:fs')).readFileSync(
+          (await import('node:path')).join(
+            (await import('node:path')).dirname((await import('node:url')).fileURLToPath(import.meta.url)),
+            '..',
+            'package.json'
+          ),
+          'utf8'
+        )
+      )
+      const cfg = resolveConfig()
+      await maybeAutoUpdate(version, { autoUpdate: cfg ? cfg.autoUpdate !== false : true })
+    }
     return await dispatch(argv)
   } catch (err) {
     if (err instanceof LinkeError) {
@@ -835,6 +1028,22 @@ async function dispatch(argv) {
       return cmdClassSchedule(flags)
     case 'me':
       return cmdMe()
+    case 'update': {
+      const { runManualUpdate } = await import('./updater.js')
+      const { version } = JSON.parse(fsReadPkg())
+      return runManualUpdate(version)
+    }
+    case 'course-search':
+      if (!positional[1]) { progress('用法: linke course-search <关键词>'); return 1 }
+      return cmdCourseSearch(positional.slice(1).join(' '))
+    case 'course-stats':
+      if (!positional[1]) { progress('用法: linke course-stats <课程名或编号>'); return 1 }
+      return cmdCourseStats(positional.slice(1).join(' '))
+    case 'rankings':
+      return cmdRankings(flags)
+    case 'comments':
+      if (!positional[1]) { progress('用法: linke comments <课程名>'); return 1 }
+      return cmdComments(positional.slice(1).join(' '), flags)
     case 'schools':
       return cmdSchools()
     case 'skill':

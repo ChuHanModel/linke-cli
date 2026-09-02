@@ -24,12 +24,17 @@ export async function callAppApi(service, params = {}, apiBase = DEFAULT_API_BAS
     .update(SIGN_KEY + service + String(signTime))
     .digest('hex')
   const query = new URLSearchParams({ service, signMain, signTime: String(signTime) })
+  const postBody = new URLSearchParams()
   for (const [k, v] of Object.entries(params)) {
-    if (v !== undefined && v !== null && v !== '') query.set(k, String(v))
+    if (v !== undefined && v !== null && v !== '') postBody.set(k, String(v))
   }
   let response
   try {
+    // PhalApi 多数业务参数 source=post——统一 POST form（GET 类接口亦兼容）
     response = await fetch(`${apiBase.replace(/\?.*$/, '')}?${query}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: postBody.toString(),
       signal: AbortSignal.timeout(20000),
     })
   } catch (err) {

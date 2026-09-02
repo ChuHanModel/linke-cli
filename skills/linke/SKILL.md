@@ -1,6 +1,6 @@
 ---
 name: linke
-version: 1.1.0
+version: 1.2.0
 description: "林课教务查询 CLI（山东财经大学强智教务）：查课表、查成绩、看教务登录状态。当用户问「我这学期课表」「今天有什么课」「我的成绩/绩点」「挂了什么课」「教务登录状态」等教务只读信息时使用。登录全自动（验证码云端识别），无需用户介入。"
 metadata:
   requires:
@@ -104,7 +104,15 @@ linke status
   `room-schedule --campus 舜耕|燕山|章丘|明水|莱芜 [--week N]`（week
   缺省当前周）、`textbooks`/`textbook-orders`/`thesis-guide`
   （`--page` 翻页）。
-- 身份：`{ userId, name, unit, discipline, class, week: { now, all } }`。
+- 身份：`{ userId, name, unit, discipline, class, week: { now, all } }`；
+  `linke status` 另含 `linkeAccount.exists`（该学号是否在林课体系）。
+- 林课自有数据（二期，22k 用户共建）：`linke course-search <关键词>`、
+  `linke course-stats <课程名>`（人数/均分/箱线图五数/标准差/挂科率/
+  分布）、`linke rankings [--by star|score]`、`linke comments <课程名>`
+  （评论+综合评分，只读）。**数据来源说明**：给分统计与榜单来自林课
+  用户贡献的成绩聚合。
+- 更新：CLI 每日自动检查新版本并后台更新（透明告知走 stderr，可用
+  `linke config --auto-update off` 关闭）；`linke update` 手动更新。
 
 ## 报错自救（exit code）
 

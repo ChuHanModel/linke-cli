@@ -20,10 +20,18 @@ test('notices 链路零后端依赖：cmdNotices 代码及其依赖不含 api.li
   assert.ok(!noticeFn.includes('App.JwNotice'), 'notices 不再调用后端 JwNotice 接口')
 })
 
-test('appapi.js 保留为休眠基建：文件存在但不被 bin.js 引用', () => {
+test('appapi.js 保留 + 教务查询链路零后端：notices 与全部教务数据命令函数体不引用后端客户端', () => {
   assert.ok(fs.existsSync(path.join(here, '..', 'src', 'appapi.js')), 'appapi.js 应保留在仓库')
   const bin = fs.readFileSync(path.join(here, '..', 'src', 'bin.js'), 'utf8')
-  assert.ok(!bin.includes('appapi'), 'bin.js 不得引用 appapi（数据面零后端依赖）')
+  // 教务数据命令函数体逐一断言（二期命令 course-*/rankings/comments/linkeAccount 探测是合法后端交互面）
+  const guarded = ['cmdNotices', 'cmdScores', 'cmdSchedule', 'cmdCredits', 'cmdCourses', 'cmdGpa', 'cmdXj', 'cmdPlan', 'cmdPyfa', 'cmdExams', 'cmdProgress', 'cmdSimplePage', 'cmdFormPage']
+  for (const fn of guarded) {
+    const start = bin.indexOf('async function ' + fn)
+    if (start === -1) continue
+    const end = bin.indexOf('\nasync function', start + 20)
+    const body = bin.slice(start, end === -1 ? undefined : end)
+    assert.ok(!body.includes('appapi') && !body.includes('linketeam'), `${fn} 是教务查询链路，不得引用后端客户端`)
+  }
 })
 
 test('parseJwcNotices：相对链接转绝对 + 窗口日期（真实页形态）', () => {
