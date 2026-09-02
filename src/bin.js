@@ -33,6 +33,10 @@ const USAGE = `linke —— 林课教务 CLI（只读查询，供 agent / 人类
   linke credits                                        学分修读（类别统计 + 通选课明细）
   linke courses [--term 2025-2026-1] [--type 通选]     全校课程查询（可再加 --dept 院系代码
                                                        --name 课程名 --teacher 教师）
+  linke gpa                                            平均学分绩点（含辅修行）
+  linke xj [--full]                                    学籍卡片（默认核心字段；--full 附
+                                                       非敏感扩展字段）
+  linke plan                                           培养执行计划（逐学期课程列表）
   linke me                                             当前登录身份（学号/姓名/院系/班级/教学周）
   linke schools                                        列出可用学校适配器
   linke skill install [--path ~/.agents/skills]        安装 agent skill 说明书
@@ -329,6 +333,30 @@ async function cmdMe() {
   return 0
 }
 
+async function cmdGpa() {
+  const config = requireConfig()
+  const gpa = await withSession(config, (adapter, session) => adapter.fetchGpa(session.cookie))
+  emitJson(gpa)
+  return 0
+}
+
+async function cmdXj(flags) {
+  const config = requireConfig()
+  const full = flags.full === true
+  const xj = await withSession(config, (adapter, session) =>
+    adapter.fetchXj(session.cookie, { full })
+  )
+  emitJson(xj)
+  return 0
+}
+
+async function cmdPlan() {
+  const config = requireConfig()
+  const plan = await withSession(config, (adapter, session) => adapter.fetchPlan(session.cookie))
+  emitJson(plan)
+  return 0
+}
+
 async function cmdSchools() {
   emitJson(listAdapters())
   return 0
@@ -391,6 +419,12 @@ async function dispatch(argv) {
       return cmdCredits()
     case 'courses':
       return cmdCourses(flags)
+    case 'gpa':
+      return cmdGpa()
+    case 'xj':
+      return cmdXj(flags)
+    case 'plan':
+      return cmdPlan()
     case 'me':
       return cmdMe()
     case 'schools':

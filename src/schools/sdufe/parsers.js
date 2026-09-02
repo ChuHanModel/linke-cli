@@ -325,3 +325,169 @@ export function parseCoursesHtml(html) {
   }
   return { total: courses.length, courses }
 }
+
+/**
+ * 解析平均学分绩点页（/jsxsd/kscj/cjcx_avg，GET 直出）。
+ * 真实结构单表 10 列：学号/姓名/专业名称/班级名称/培养层次/所修总学分/
+ * 课程门数/平均分/平均学分绩/平均学分绩点；一行主修 + N 行辅修
+ * （辅修行以专业名称含「(辅修)」判定，行序不保证主修在前）。
+ * → { rows: [{ studentId, name, major, className, level, totalCredits,
+ *     courseCount, averageScore, averageGrade, gpa, majorType }] }
+ */
+export function parseGpaHtml(html) {
+  if (isJwLoginExpired(html)) {
+    const err = new Error('jw login expired')
+    err.isJwLoginExpired = true
+    throw err
+  }
+  const table = findTableByHeaders(html, ['学号', '平均学分绩点'])
+  if (!table) {
+    throw parseError('平均学分绩点（未找到数据表）')
+  }
+  const col = (h) => table.headers.findIndex((x) => x.includes(h))
+  const idx = {
+    studentId: col('学号'),
+    name: col('姓名'),
+    major: col('专业名称'),
+    className: col('班级名称'),
+    level: col('培养层次'),
+    totalCredits: col('所修总学分'),
+    courseCount: col('课程门数'),
+    averageScore: col('平均分'),
+    averageGrade: col('平均学分绩'),
+    gpa: col('平均学分绩点'),
+  }
+  const rows = []
+  for (const row of table.rows) {
+    const item = {}
+    for (const [key, i] of Object.entries(idx)) {
+      item[key] = i >= 0 ? row[i] ?? '' : ''
+    }
+    if (!item.name && !item.major) continue
+    item.majorType = /（辅修）|\(辅修\)/.test(item.major) ? '辅修' : '主修'
+    rows.push(item)
+  }
+  if (rows.length === 0) {
+    throw parseError('平均学分绩点（数据表零行）')
+  }
+  return { rows }
+}
+
+/**
+ * 解析学籍卡片页（/jsxsd/grxx/xsxx，GET 直出，不规则标签值网格）。
+ *
+ * 敏感裁剪口径（T12 决策，devlog 在案）：默认只输出核心学籍字段
+ * （院系/专业/学制/班级/学号/层次/年级）；--full 额外输出白名单内的
+ * 非敏感学籍字段。身份证编号/出生日期/电话/考号/证书号/家庭住址/
+ * 家庭成员等强敏感字段不进入任何输出（查询 CLI 的必要范围之外，
+ * 避免身份信息流入 agent 上下文与终端日志）。
+ *
+ * → { studentId, department, major, duration, className, level, grade,
+ *     extra?: {[label]: value} }
+ */
+const XJ_EXTRA_WHITELIST = new Set([
+  '性别', '民族', '政治面貌', '学习形式', '学习层次', '外语种类',
+  '专业方向', '姓名拼音', '入学日期', '毕业日期', '入党团时间', '籍贯',
+])
+const XJ_SENSITIVE_RE = /身份证|出生|电话|手机|考号|证书|住址|邮政|联系人|家庭成员|火车站|婚否/
+
+export function parseXjHtml(html, { full = false } = {}) {
+  if (isJwLoginExpired(html)) {
+    const err = new Error('jw login expired')
+    err.isJwLoginExpired = true
+    throw err
+  }
+  // 收集全部单元格文本（保留空串——空值是模式 B 的值占位，
+  // 跳过会让「外语种类」（空）误吸下一个标签格的文本）
+  const texts = []
+  for (const m of html.matchAll(/<td\b[^>]*>([\s\S]*?)<\/td>/gi)) {
+    texts.push(cleanCell(m[1]))
+  }
+  const fields = {}
+  // 模式 A：一格内「标签：值」连写（真实页：院系：… /专业：… /学制：… /班级：… /学号：…）
+  for (const text of texts) {
+    if (!text) continue
+    const m = text.match(/^([^：:]{2,8})[：:](.+)$/)
+    if (m && !text.includes(' ')) {
+      fields[m[1].trim()] = m[2].trim()
+    }
+  }
+  // 模式 B：白名单标签独立成格，值在相邻格（相邻格是另一个标签 → 值为空）
+  const LABEL_VALUE_RE = /^[^：:]{2,8}[：:].+$/
+  for (let i = 0; i < texts.length; i++) {
+    const label = texts[i]
+    if (!XJ_EXTRA_WHITELIST.has(label) || label in fields) continue
+    const next = texts[i + 1] ?? ''
+    if (XJ_EXTRA_WHITELIST.has(next) || LABEL_VALUE_RE.test(next)) continue
+    fields[label] = next
+  }
+  const studentId = fields['学号'] || ''
+  if (!studentId) {
+    throw parseError('学籍卡片（未找到学号字段）')
+  }
+  const className = fields['班级'] || ''
+  const gradeMatch = className.match(/(20\d{2})/)
+  const result = {
+    studentId,
+    department: fields['院系'] || '',
+    major: fields['专业'] || '',
+    duration: fields['学制'] || '',
+    className,
+    level: fields['学习层次'] || '',
+    grade: gradeMatch ? gradeMatch[1] : '',
+  }
+  if (full) {
+    const coreKeys = new Set(['学号', '院系', '专业', '学制', '班级', '学习层次'])
+    result.extra = {}
+    for (const [label, value] of Object.entries(fields)) {
+      if (coreKeys.has(label)) continue
+      if (XJ_SENSITIVE_RE.test(label)) continue // 强敏感：--full 也不出
+      if (XJ_EXTRA_WHITELIST.has(label) || value.length <= 20) {
+        result.extra[label] = value
+      }
+    }
+  }
+  return result
+}
+
+/**
+ * 解析培养执行计划页（/jsxsd/pyfa/pyfa_query，GET 直出）。
+ * 真实结构单表 11 列：序号/开课学期/课程编号/课程名称/开课单位/学分/
+ * 总学时/考核方式/课程性质/是否考试/课程大纲。
+ * → { total, courses: [{ term, courseCode, courseName, department,
+ *     credit, hours, examMethod, nature, isExam, syllabus }] }
+ */
+export function parsePlanHtml(html) {
+  if (isJwLoginExpired(html)) {
+    const err = new Error('jw login expired')
+    err.isJwLoginExpired = true
+    throw err
+  }
+  const table = findTableByHeaders(html, ['课程编号', '课程名称', '开课学期'])
+  if (!table) {
+    throw parseError('执行计划（未找到课程数据表）')
+  }
+  const col = (h) => table.headers.findIndex((x) => x.includes(h))
+  const idx = {
+    term: col('开课学期'),
+    courseCode: col('课程编号'),
+    courseName: col('课程名称'),
+    department: col('开课单位'),
+    credit: col('学分'),
+    hours: col('总学时'),
+    examMethod: col('考核方式'),
+    nature: col('课程性质'),
+    isExam: col('是否考试'),
+    syllabus: col('课程大纲'),
+  }
+  const courses = []
+  for (const row of table.rows) {
+    const item = {}
+    for (const [key, i] of Object.entries(idx)) {
+      item[key] = i >= 0 ? row[i] ?? '' : ''
+    }
+    if (!item.courseCode) continue
+    courses.push(item)
+  }
+  return { total: courses.length, courses }
+}

@@ -26,14 +26,26 @@ export function stripSpaces(html) {
 }
 
 /**
- * 教务「登录过期」判定：与 App 端 utils/jwLoginExpired.js 同源。
- * 登录页通常短且含 </html>；部分情况直接返回"用户登录/请先登录"文案。
+ * 教务「登录过期」判定。
+ * 判定序（T12 修订：短页阈值曾误伤 cjcx_avg 这类 <5KB 小业务页）：
+ *   1. 登录页表单特征（RANDOMCODE + 账号/密码输入框）——最准；
+ *   2. 「用户登录 / 请先登录」文案；
+ *   3. 短 html + </html> 且不含 <table>——登录页/错误页兜底
+ *      （业务页必有数据表，小页面如 gpa 页含表即放行）。
  */
 export function isJwLoginExpired(html) {
   if (!html || typeof html !== 'string') return false
   const trimmed = html.trim()
-  if (trimmed.includes('</html>') && trimmed.length < 5000) return true
+  if (
+    trimmed.includes('RANDOMCODE') &&
+    (trimmed.includes('userAccount') || trimmed.includes('userPassword'))
+  ) {
+    return true
+  }
   if (trimmed.includes('用户登录') || trimmed.includes('请先登录')) return true
+  if (trimmed.includes('</html>') && trimmed.length < 5000 && !/<table[\s>]/i.test(trimmed)) {
+    return true
+  }
   return false
 }
 

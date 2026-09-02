@@ -28,6 +28,18 @@ test('登录页判定：正常业务长页不误判', () => {
   assert.equal(isJwLoginExpired(long), false)
 })
 
+test('登录页判定：短小业务页含数据表不误判（T12 修订——gpa 页 <5KB 真实场景）', () => {
+  const smallBusinessPage = '<html><head><title>平均学分绩点</title></head><body><table><tr><td>x</td></tr></table></body></html>'
+  assert.equal(isJwLoginExpired(smallBusinessPage), false)
+})
+
+test('登录页判定：表单特征（RANDOMCODE+账号输入）与短错误页仍判过期', () => {
+  const loginForm = '<html><input name="RANDOMCODE"><input name="userAccount"></html>'
+  assert.equal(isJwLoginExpired(loginForm), true)
+  const errorPage = '<html><body>error</body></html>'
+  assert.equal(isJwLoginExpired(errorPage), true)
+})
+
 // ---------- parseUserData / 登录标记 ----------
 
 test('parseUserData 提取姓名/单位/专业/班级', () => {

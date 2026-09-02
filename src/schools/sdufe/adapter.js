@@ -18,6 +18,9 @@ import {
   parseScoresHtml,
   parseCreditsHtml,
   parseCoursesHtml,
+  parseGpaHtml,
+  parseXjHtml,
+  parsePlanHtml,
 } from './parsers.js'
 
 const USER_AGENT = 'Apifox/1.0.0 (https://apifox.com)'
@@ -240,6 +243,24 @@ export const sdufeAdapter = {
       cookie,
     })
     return parseCoursesHtml(res.text || '')
+  },
+
+  /** 平均学分绩点（含辅修行，GET 直出） */
+  async fetchGpa(cookie) {
+    const res = await this.request(`${this.baseUrl}/jsxsd/kscj/cjcx_avg`, 'GET', { cookie })
+    return parseGpaHtml(res.text || '')
+  },
+
+  /** 学籍卡片（默认裁剪敏感字段，full=true 输出白名单内扩展字段） */
+  async fetchXj(cookie, { full = false } = {}) {
+    const res = await this.request(`${this.baseUrl}/jsxsd/grxx/xsxx`, 'GET', { cookie })
+    return parseXjHtml(res.text || '', { full })
+  },
+
+  /** 培养执行计划（GET 直出，逐学期课程列表） */
+  async fetchPlan(cookie) {
+    const res = await this.request(`${this.baseUrl}/jsxsd/pyfa/pyfa_query`, 'GET', { cookie })
+    return parsePlanHtml(res.text || '')
   },
 
   /** session 探活：返回当前登录用户信息；过期抛 isJwLoginExpired 错误 */
