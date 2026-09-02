@@ -45,6 +45,15 @@ const USAGE = `linke —— 林课教务 CLI（只读查询，供 agent / 人类
     minor-plan|diversion                                 成绩认定/学业导师/论文成绩/社会考试/
                                                           留言/辅修计划/专业方向分流
   （以上长尾命令通用 --page N 翻页）
+  linke contests [--name 竞赛名] [--year 年份]         学科竞赛获奖
+  linke syllabus-query [--term] [--course] [--teacher]  教学进度（授课计划，可加 --college）
+  linke teacher-schedule --teacher-id 19856550          教师课表（教工号见 courses 的 teacherCode）
+  linke room-schedule --campus 舜耕 [--week 3]          教室课表（week 缺省当前周；可加 --building
+                                                        --from-sec --to-sec）
+  linke xk-credits [--term]                             选课学分统计
+  linke xk-logs [--term] [--round 轮次]                 选退课日志
+  linke calendar [--term]                               教学周历
+  linke textbooks / textbook-orders / thesis-guide      教材账目/选订教材/毕业过程指导（--page 翻页）
   linke me                                             当前登录身份（学号/姓名/院系/班级/教学周）
   linke schools                                        列出可用学校适配器
   linke skill install [--path ~/.agents/skills]        安装 agent skill 说明书
@@ -416,6 +425,9 @@ const SIMPLE_PAGES = {
   social: { path: '/jsxsd/xsdjks/xsdjks_list', label: '社会考试报名' },
   messages: { path: '/jsxsd/ggly/ysly_query', label: '已收留言' },
   'minor-plan': { path: '/jsxsd/fxgl/fxzxjh', label: '辅修执行计划' },
+  textbooks: { path: '/jsxsd/xsjc/xsjc', label: '教材账目' },
+  'textbook-orders': { path: '/jsxsd/xsjc/xdjcxx', label: '选订教材' },
+  'thesis-guide': { path: '/jsxsd/bysj/gcfk.do', label: '毕业过程指导' },
   diversion: {
     label: '专业/方向分流查询',
     combined: [
@@ -423,6 +435,104 @@ const SIMPLE_PAGES = {
       { key: 'directionOptions', path: '/jsxsd/xsxj/toQueryfxfl.do', label: '可选专业方向' },
     ],
   },
+}
+
+/** T14 校区中文名 → xqid 码（真实页 select 实锤） */
+const CAMPUS_MAP = { 舜耕: '1', 燕山: '2', 章丘: '3', 明水: '4', 莱芜: '5' }
+
+/** T14 表单型查询页配置（真实提交端点均经探针验证，见 devlog） */
+const FORM_PAGES = {
+  contests: {
+    label: '学科竞赛',
+    run: (adapter, cookie, flags, term) =>
+      adapter.fetchContests(cookie, {
+        name: str(flags.name),
+        year: str(flags.year),
+      }),
+  },
+  'syllabus-query': {
+    label: '教学进度（授课计划）',
+    requireTerm: true,
+    run: (adapter, cookie, flags, term) =>
+      adapter.fetchSyllabusQuery(cookie, {
+        term,
+        course: str(flags.course),
+        teacher: str(flags.teacher),
+        department: str(flags.college),
+      }),
+  },
+  'teacher-schedule': {
+    label: '教师课表',
+    requireTerm: true,
+    requireFlags: ['teacher-id'],
+    run: (adapter, cookie, flags, term) =>
+      adapter.fetchTeacherSchedule(cookie, {
+        teacherId: str(flags['teacher-id']),
+        term,
+        department: str(flags.college),
+      }),
+  },
+  'room-schedule': {
+    label: '教室课表',
+    requireTerm: true,
+    requireFlags: ['campus'],
+    currentWeek: true,
+    run: (adapter, cookie, flags, term, weekNow) =>
+      adapter.fetchRoomSchedule(cookie, {
+        campusCode: CAMPUS_MAP[str(flags.campus)] || str(flags.campus),
+        week: str(flags.week) || weekNow || '1',
+        building: str(flags.building),
+        fromSec: str(flags['from-sec']),
+        toSec: str(flags['to-sec']),
+        term,
+      }),
+  },
+  'xk-credits': {
+    label: '选课学分统计',
+    requireTerm: true,
+    run: (adapter, cookie, flags, term) => adapter.fetchXkCredits(cookie, { term }),
+  },
+  'xk-logs': {
+    label: '选退课日志',
+    requireTerm: true,
+    run: (adapter, cookie, flags, term) =>
+      adapter.fetchXkLogs(cookie, { term, round: str(flags.round) }),
+  },
+  calendar: {
+    label: '教学周历',
+    run: (adapter, cookie, flags) =>
+      adapter.fetchCalendar(cookie, { term: str(flags.term) }),
+  },
+}
+
+function str(v) {
+  return v !== undefined && v !== true && v !== false ? String(v) : ''
+}
+
+async function cmdFormPage(name, flags) {
+  const config = requireConfig()
+  const spec = FORM_PAGES[name]
+  const missing = (spec.requireFlags || []).filter((k) => !str(flags[k]))
+  if (missing.length) {
+    progress(`缺少必填参数: ${missing.map((k) => '--' + k).join(' ')}（见 linke help）`)
+    return 1
+  }
+  const result = await withSession(config, async (adapter, session) => {
+    let term = str(flags.term)
+    if (!term && (spec.requireTerm || spec.run.length >= 5)) {
+      term = (await adapter.fetchCurrentTerm(session.cookie)) || ''
+      if (term) progress(`当前学期: ${term}`)
+    }
+    let weekNow = ''
+    if (spec.currentWeek) {
+      const info = await adapter.probeSession(session.cookie)
+      weekNow = info && info.week ? String(info.week.now) : ''
+    }
+    const base = await spec.run(adapter, session.cookie, flags, term, weekNow)
+    return { label: spec.label, ...base }
+  })
+  emitJson(result)
+  return 0
 }
 
 async function cmdSimplePage(name, flags) {
@@ -545,6 +655,18 @@ async function dispatch(argv) {
     case 'messages':
     case 'minor-plan':
     case 'diversion':
+      return cmdSimplePage(command, flags)
+    case 'contests':
+    case 'syllabus-query':
+    case 'teacher-schedule':
+    case 'room-schedule':
+    case 'xk-credits':
+    case 'xk-logs':
+    case 'calendar':
+      return cmdFormPage(command, flags)
+    case 'textbooks':
+    case 'textbook-orders':
+    case 'thesis-guide':
       return cmdSimplePage(command, flags)
     case 'me':
       return cmdMe()

@@ -318,6 +318,62 @@ export const sdufeAdapter = {
    *   数据行首列丢弃（changes 展开图标列），tableIndex 取第几张含
    *   th 的表（social 第二张为考级成绩） }
    */
+  /** T14 学科竞赛（POST xkjsbm_list，jsmc 竞赛名/jsnf 年份，空=全部） */
+  async fetchContests(cookie, { name = '', year = '' } = {}) {
+    const body = `jsmc=${encodeURIComponent(name)}&jsnf=${encodeURIComponent(year)}`
+    const res = await this.request(`${this.baseUrl}/jsxsd/xsxkjs/xkjsbm_list`, 'POST', { body, cookie })
+    return parseSimpleTable(res.text || '')
+  },
+
+  /** T14 教学进度/授课计划（POST skjhxx，xnxqid 必填——JS 校验同口径） */
+  async fetchSyllabusQuery(cookie, { term = '', course = '', teacher = '', department = '' } = {}) {
+    const body =
+      `kcmc=${encodeURIComponent(course)}&kkyx=${encodeURIComponent(department)}` +
+      `&skjs=${encodeURIComponent(teacher)}&xnxqid=${encodeURIComponent(term)}`
+    const res = await this.request(`${this.baseUrl}/jsxsd/xkgl/skjhxx`, 'POST', { body, cookie })
+    return parseSimpleTable(res.text || '')
+  },
+
+  /** T14 教师课表（POST kbxx_teacher_ifr；jsid=教工号，courses 输出的 teacherCode） */
+  async fetchTeacherSchedule(cookie, { teacherId, term = '', department = '' } = {}) {
+    const body =
+      `jsid=${encodeURIComponent(teacherId)}&skyx=${encodeURIComponent(department)}` +
+      `&xnxqh=${encodeURIComponent(term)}&xz=`
+    const res = await this.request(`${this.baseUrl}/jsxsd/kbcx/kbxx_teacher_ifr`, 'POST', { body, cookie })
+    return parseSimpleTable(res.text || '')
+  },
+
+  /** T14 教室课表（POST kbxx_classroom_ifr；campus 用中文名映射，week 默认当前周） */
+  async fetchRoomSchedule(cookie, { campusCode, week = '1', building = '', fromSec = '', toSec = '', term = '' } = {}) {
+    const body =
+      `xnxqh=${encodeURIComponent(term)}&xqid=${encodeURIComponent(campusCode)}` +
+      `&jzwid=${encodeURIComponent(building)}&zc1=${encodeURIComponent(week)}&zc2=${encodeURIComponent(week)}` +
+      `&jc1=${encodeURIComponent(fromSec)}&jc2=${encodeURIComponent(toSec)}`
+    const res = await this.request(`${this.baseUrl}/jsxsd/kbcx/kbxx_classroom_ifr`, 'POST', { body, cookie })
+    return parseSimpleTable(res.text || '')
+  },
+
+  /** T14 选课学分统计（POST xs_xkglxftjlist，xnxq 学期） */
+  async fetchXkCredits(cookie, { term = '' } = {}) {
+    const body = `xnxq=${encodeURIComponent(term)}`
+    const res = await this.request(`${this.baseUrl}/jsxsd/xsxk/xs_xkglxftjlist`, 'POST', { body, cookie })
+    return parseSimpleTable(res.text || '')
+  },
+
+  /** T14 选退课日志（POST xs_txlist，xnxqh 学期 + xkmc 选课轮次，空=全部） */
+  async fetchXkLogs(cookie, { term = '', round = '' } = {}) {
+    const body = `xkmc=${encodeURIComponent(round)}&xnxqh=${encodeURIComponent(term)}`
+    const res = await this.request(`${this.baseUrl}/jsxsd/xsxk/xs_txlist`, 'POST', { body, cookie })
+    return parseSimpleTable(res.text || '')
+  },
+
+  /** T14 教学周历（GET jxzl_query，xnxq01id 学期，空=教务默认） */
+  async fetchCalendar(cookie, { term = '' } = {}) {
+    const q = term ? `?xnxq01id=${encodeURIComponent(term)}` : ''
+    const res = await this.request(`${this.baseUrl}/jsxsd/jxzl/jxzl_query${q}`, 'GET', { cookie })
+    return parseSimpleTable(res.text || '')
+  },
+
   async fetchSimplePage(cookie, path, { pageIndex = 1, dropFirst = false, tableIndex = 0 } = {}) {
     const sep = path.includes('?') ? '&' : '?'
     const res = await this.request(`${this.baseUrl}${path}${sep}pageIndex=${pageIndex}`, 'GET', { cookie })
