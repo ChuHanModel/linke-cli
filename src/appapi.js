@@ -37,6 +37,14 @@ const SIGN_KEY = 'Linke'
  * @returns {Promise<object>} ret 200 的 data 部分
  */
 export async function callAppApi(service, params = {}, apiBase = DEFAULT_API_BASE) {
+  // T37：业务请求携带随机设备标识（复用遥测 getDeviceId，勿造第二份；
+  // 动态 import 避免循环依赖 appapi→telemetry→linkeapi→appapi；
+  // 失败静默回退=头不发，与旧版口径一致）
+  let deviceId = ''
+  try {
+    const { getDeviceId } = await import('./telemetry.js')
+    deviceId = (await getDeviceId()).slice(0, 64)
+  } catch {}
   const signTime = Math.floor(Date.now() / 1000)
   const signMain = crypto
     .createHash('md5')
@@ -55,6 +63,7 @@ export async function callAppApi(service, params = {}, apiBase = DEFAULT_API_BAS
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
         'User-Agent': CLI_USER_AGENT,
+        ...(deviceId ? { 'X-Device-Id': deviceId } : {}),
       },
       body: postBody.toString(),
       signal: AbortSignal.timeout(20000),
