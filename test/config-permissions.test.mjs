@@ -79,7 +79,9 @@ test('schools 命令输出适配器列表（stdout JSON）', async () => {
     try {
       const code = await runCli(['schools'])
       assert.equal(code, 0)
-      const parsed = JSON.parse(stdoutChunks.join(''))
+      // 遥测使 runCli 略变慢，node:test 的 IPC 消息（test:pass 等）可能
+      // 撞进被替换的 stdout 窗口——emitJson 是单次 write，只取首块解析
+      const parsed = JSON.parse(stdoutChunks[0] || '')
       assert.ok(Array.isArray(parsed))
       assert.ok(parsed.some((a) => a.id === 'sdufe'))
     } finally {

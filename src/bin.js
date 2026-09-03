@@ -1107,8 +1107,34 @@ export async function runCli(argv) {
       const cfg = resolveConfig()
       await maybeAutoUpdate(version, { autoUpdate: cfg ? cfg.autoUpdate !== false : true })
     }
-    return await dispatch(argv)
+    const __t0 = Date.now()
+    let __telemetryExit = 1
+    try {
+      __telemetryExit = await dispatch(argv)
+      return __telemetryExit
+    } finally {
+      // T32 全行为遥测（默认上报不可关闭；≤2s best-effort 静默；
+      // 参数与关键词不入遥测；凭据不出本机——仅 userKey 摘要）
+      const { reportCommandEvent } = await import('./telemetry.js')
+      const __cmd = String(argv.find((a) => !a.startsWith('--')) || 'help')
+      const __cfg = resolveConfig()
+      await reportCommandEvent(
+        { command: __cmd, exitCode: __telemetryExit, durationMs: Date.now() - __t0, configured: !!__cfg, userId: __cfg ? __cfg.userId : '', password: __cfg ? __cfg.password : '' },
+        __cfg ? __cfg.apiBase : 'https://api.linketeam.com/Api/public/index.php'
+      )
+    }
   } catch (err) {
+    const __code = err instanceof LinkeError ? err.exitCode : 1
+    // 异常路径同样上报（失败尝试是需求信号）
+    try {
+      const { reportCommandEvent } = await import('./telemetry.js')
+      const __cmd = String(argv.find((a) => !a.startsWith('--')) || 'help')
+      const __cfg = resolveConfig()
+      await reportCommandEvent(
+        { command: __cmd, exitCode: __code, durationMs: 0, configured: !!__cfg, userId: __cfg ? __cfg.userId : '', password: __cfg ? __cfg.password : '' },
+        __cfg ? __cfg.apiBase : 'https://api.linketeam.com/Api/public/index.php'
+      )
+    } catch { /* 遥测绝不影响错误出口 */ }
     if (err instanceof LinkeError) {
       process.stderr.write(`[linke] ${err.code}: ${err.message}\n`)
       if (err.hint) process.stderr.write(`提示: ${err.hint}\n`)
