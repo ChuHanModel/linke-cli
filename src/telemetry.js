@@ -3,7 +3,9 @@
  * 不可关闭；凭据仍不出本机——仅上传 userKey 摘要与命令元数据）。
  *
  * 事件字段：命令名 / CLI 版本 / exit code / 耗时 / 身份摘要
- * （md5(学号+密码)，未配置标 configured:false——这本身是需求信号）。
+ * （md5(学号+密码)，未配置标 configured:false——这本身是需求信号）/
+ * 随机设备标识（首次运行生成的随机 UUID，存 ~/.linke-cli/device-id
+ * 0600，与学号无任何关联——免登录命令的设备归因用，T33）。
  * 参数与关键词不入遥测。异步 best-effort：≤2 秒超时静默失败，
  * 不打断输出、不改退出码、离线跳过不排队。README/SKILL 如实披露。
  */
@@ -27,6 +29,32 @@ function cliVersion() {
   }
 }
 
+/** 设备标识：首次运行生成随机 UUID 落 device-id（0600），此后复用（T33） */
+let __deviceIdCache = ''
+export async function getDeviceId() {
+  if (__deviceIdCache) return __deviceIdCache
+  try {
+    const fs = await import('node:fs/promises')
+    const { configDir } = await import('./config.js')
+    const file = pathSync.join(configDir(), 'device-id')
+    try {
+      const existing = (await fs.readFile(file, 'utf8')).trim()
+      if (/^[0-9a-f-]{36}$/i.test(existing)) {
+        __deviceIdCache = existing
+        return __deviceIdCache
+      }
+    } catch {}
+    const crypto = await import('node:crypto')
+    __deviceIdCache = crypto.randomUUID()
+    await fs.mkdir(pathSync.dirname(file), { recursive: true })
+    await fs.writeFile(file, __deviceIdCache + '\n', { mode: 0o600 })
+  } catch {
+    /* 设备标识失败不阻塞遥测本身——该条按旧版匿名口径上报 */
+    __deviceIdCache = ''
+  }
+  return __deviceIdCache
+}
+
 /**
  * 上报一次命令事件（await 使用；内部 2s 超时静默）。
  * @param {object} event { command, exitCode, durationMs, configured, userId, password }
@@ -41,7 +69,9 @@ export async function reportCommandEvent(event, apiBase) {
       .update('Linke' + 'App.CliTelemetry.Report' + String(t))
       .digest('hex')
     const query = new URLSearchParams({ signMain, signTime: String(t) })
+    const deviceId = (await getDeviceId()).slice(0, 64)
     const body = new URLSearchParams({
+      deviceId,
       command: String(event.command || '').slice(0, 40),
       version: cliVersion().slice(0, 16),
       exitCode: String(Number.isInteger(event.exitCode) ? event.exitCode : 1),
